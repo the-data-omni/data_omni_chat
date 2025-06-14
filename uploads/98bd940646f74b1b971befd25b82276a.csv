@@ -1,0 +1,10 @@
+﻿Item Recipe:       (001)  48pt,,,,,
+Stage Recipe:       48pt ,,,,,
+Batch ID:             Prod1,,,,,
+Item ID:           42,,,,,
+Date/Time:          5/1/2017 4:28:56 PM,,,,,
+,,,,,
+Point,Measurement,Gain,GFit,X,Y
+1,12.3,99.7,0.99,1,1
+2,12.2,99.9,0.98,2,2
+3,12.1,99.8,0.98,3,3
