@@ -145,7 +145,7 @@ def get_profiles():
 # ================================================================== #
 #  🔺  SYNTHETIC‑DATA GENERATOR                                      #
 # ================================================================== #
-@router.get("/generate_synthetic")
+@router.post("/generate_synthetic")
 def generate_synthetic(sample_size: Optional[int] = Query(None, ge=1)):
     """
     Fit a Gaussian Copula on the current dataset and create synthetic rows.
@@ -165,7 +165,22 @@ def generate_synthetic(sample_size: Optional[int] = Query(None, ge=1)):
     return JSONResponse(content=safe_payload)
     
     # return JSONResponse(content=service.generate_synthetic_data(sample_size))
+@router.post("/upload_anonymized_data")
+def upload_anonymized_data(data: List[Dict[str, Any]] = Body(...)):
+    """
+    Receives a full, anonymized dataset generated on the client.
 
+    Side-effects:
+      • Caches the anonymized dataset in memory.
+      • Builds/updates the synthetic profile based on the received data.
+
+    Returns a confirmation message.
+    """
+    # The 'data' is automatically validated by FastAPI as a list of dictionaries.
+    # We are assuming the service object has been updated with the new method.
+    payload = service.process_anonymized_data(data)
+
+    return JSONResponse(content=payload)
 
 # ================================================================== #
 #  🔺  CLEANUP PIPELINE                                              #

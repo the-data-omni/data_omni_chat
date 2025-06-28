@@ -1,0 +1,1 @@
+import{j as t,B as e}from"./index-C5-7V04H.js";function s({children:n}){return t.jsx(e,{sx:{alignItems:"center",display:"flex",flexDirection:"column",justifyContent:"center",minHeight:"100%",p:{xs:2,md:3}},children:t.jsx(e,{sx:{maxWidth:"560px",width:"100%"},children:n})})}export{s as C};

@@ -2,14 +2,16 @@
 from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
-class DataFrameRequest(BaseModel):
-    """
-    Defines the structure for a request containing DataFrame-like data and an optional question.
-    Typically used as input payload for endpoints processing tabular data.
-    """
-    data: Optional[List[Dict[str, Any]]] = None 
-    question: Optional[str] = None 
+class ChatTurn(BaseModel):
+    question: str
+    answer: str
+    code: Optional[str] = None # Add the code field
 
+class DataFrameRequest(BaseModel):
+    data: Optional[List[Dict[str, Any]]] = None
+    question: str
+    conversation_id: Optional[str] = None # Frontend sends this back
+    chat_history: Optional[List[ChatTurn]] = []
 
 class ExecuteCodeWithDataPayload(BaseModel):
     """
@@ -17,6 +19,14 @@ class ExecuteCodeWithDataPayload(BaseModel):
     """
     code: str 
     data: Optional[List[Dict[str, Any]]] = None 
+
+class AnalysisResponse(BaseModel):
+    summary: Optional[str] = None
+    parameterized_summary: Optional[str] = None
+    generated_code: Optional[str] = None
+    chart_data: Optional[Dict[str, Any]] = None
+    analysis_data: Optional[Dict[str, Any]] = None
+    conversation_id: str # Backend always returns this
 
 
 class SummarizePayload(BaseModel):

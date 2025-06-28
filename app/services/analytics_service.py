@@ -62,7 +62,7 @@ from app.cleanup.clean_pivot import restructure_pivoted_csv_v3
 from app.models.schemas import (CleanupAction, CleanupExecuteRequest,
                                 CleanupPlanRequest, DataFrameRequest,
                                 DataProfile, ExecuteCodeWithDataPayload,
-                                LLMFreeAnalysisRequest, SummarizePayload)
+                                LLMFreeAnalysisRequest, SummarizePayload, ChatTurn)
 
 
 def _sanitize_nan(obj):             # paste the helper here
@@ -96,6 +96,7 @@ class DataAnalysisService:
         self.profile_original: Optional[Dict[str, Any]] = None
         self.profile_synthetic: Optional[Dict[str, Any]] = None
         self.csv_path: Optional[str] = None
+        self.chat_sessions: Dict[str, List[ChatTurn]] = {}
 
     # --------------------  Internal helpers  -------------------- #
     def _get_df(self, data: Optional[List[Dict[str, Any]]]) -> pd.DataFrame:
@@ -359,157 +360,6 @@ class DataAnalysisService:
             "table_screenshot_b64": screenshot_b64,        # 👈 NEW FIELD
         }
 
-        # return {
-        #     "message": "Data uploaded, processed, and profiled.",
-        #     "classification_final": final_classification_code or "NONE",
-        #     "llm_summary_json_final": final_llm_summary_json,
-        #     "cleanup_code_generated_and_applied": cleanup_applied_successfully,
-        #     "row_count": len(df_orig),
-        #     "column_count": len(df_orig.columns),
-        #     "profile": self.profile_original,
-        #     "cleanup_plan": cleanup_plan_result["plan"],
-        # }
-    # async def upload_data(
-    #     self,
-    #     *,
-    #     file: Optional[UploadFile] = None,
-    #     json_rows: Optional[List[Dict[str, Any]]] = None,
-    #     drop_null_threshold: float = 0.5,
-    # ) -> Dict[str, Any]:
-    #     """Method to upload dataset for analysis, classify, and conditionally cleanup."""
-    #     df_orig: Optional[pd.DataFrame] = None # Initialize df_orig
-
-    #     # 1️⃣ Save upload to disk and ingest
-    #     if file:
-    #         os.makedirs("uploads", exist_ok=True)
-    #         fname = f"{uuid.uuid4().hex}_{file.filename}"
-    #         path = os.path.join("uploads", fname)
-    #         contents = await file.read()
-    #         with open(path, "wb") as out:
-    #             out.write(contents)
-    #         self.csv_path = path
-    #         try:
-    #             df_orig = pd.read_csv(
-    #                 self.csv_path, keep_default_na=False, na_filter=False
-    #             )
-    #         except Exception as exc:
-    #             raise HTTPException(status_code=400, detail=f"CSV parsing failed: {exc}")
-    #         # self.dataset will be set from df_orig later, after potential cleaning
-    #     elif json_rows is not None:
-    #         if not isinstance(json_rows, list) or not all(isinstance(row, dict) for row in json_rows):
-    #             raise HTTPException(status_code=400, detail="JSON must be a list of objects.")
-    #         df_orig = pd.DataFrame(json_rows)
-    #         os.makedirs("uploads", exist_ok=True)
-    #         fname = f"{uuid.uuid4().hex}_from_json.csv"
-    #         path = os.path.join("uploads", fname)
-    #         df_orig.to_csv(path, index=False)
-    #         self.csv_path = path
-    #         # self.dataset will be set from df_orig later
-    #     else:
-    #         raise HTTPException(status_code=400, detail="Provide CSV file or JSON array.")
-
-    #     if df_orig is None: # Should not happen if logic above is correct
-    #          raise HTTPException(status_code=500, detail="DataFrame not loaded.")
-
-    #     # --- Integrated Classification and Cleanup Workflow ---
-    #     print("\nStarting initial classification and cleanup workflow...")
-    #     # Pass the current working DataFrame (df_orig).
-    #     # main_analysis_and_cleanup_pipeline handles its own preview generation.
-    #     classification_code, raw_classification_json, generated_cleanup_code = await main_analysis_and_cleanup_pipeline(
-    #         df=fake_preview_df(df_orig.copy()), # Pass a copy to avoid modification by preview generation within pipeline
-    #         img_path=IMG_PATH_DEFAULT,
-    #         head_rows=HEAD_ROWS_DEFAULT,
-    #         model=OPENAI_MODEL_DEFAULT,
-    #         max_attempts_classification=MAX_ATTEMPTS_DEFAULT,
-    #         max_llm_iterations_cleanup=MAX_ATTEMPTS_DEFAULT
-    #     )
-        
-    #     final_classification_code = classification_code
-    #     final_llm_summary_json = raw_classification_json
-    #     final_generated_code_to_apply = generated_cleanup_code
-
-    #     if final_classification_code == "PIVOT":
-    #         print("\nInitial classification is PIVOT. Performing pivot cleanup...")
-    #         if not self.csv_path: # Should be set if df_orig was loaded from CSV or JSON
-    #              raise HTTPException(status_code=500, detail="CSV path not available for pivot cleanup.")
-
-    #         # restructure_pivoted_csv_v3 should operate on the file and return a DataFrame
-    #         cleaned_df_after_pivot = restructure_pivoted_csv_v3(self.csv_path)
-    #         if cleaned_df_after_pivot is None:
-    #             print("Pivot cleanup function returned None. Assuming cleanup failed or was not applicable.")
-    #             # Potentially raise HTTPException or decide how to proceed.
-    #             # For now, we'll assume df_orig remains as is if pivot fails.
-    #         else:
-    #             print("Pivot cleanup successful. Updating DataFrame and CSV path.")
-    #             df_orig = cleaned_df_after_pivot # Update df_orig to the unpivoted version
-                
-    #             # Update CSV path for the restructured file
-    #             base, ext = os.path.splitext(self.csv_path)
-    #             cleaned_path = f"{base}_restructured{ext}"
-    #             df_orig.to_csv(cleaned_path, index=False)
-    #             self.csv_path = cleaned_path
-    #             print(f"Restructured data saved to: {self.csv_path}")
-
-    #             print("Re-classifying the unpivoted data...")
-    #             # Call the pipeline again with the unpivoted DataFrame
-    #             classification_code_after_pivot, raw_json_after_pivot, generated_code_after_pivot = await main_analysis_and_cleanup_pipeline(
-    #                 df=fake_preview_df(df_orig.copy()), # Pass a copy of the unpivoted DataFrame
-    #                 img_path=IMG_PATH_DEFAULT, # Can reuse or use a new path
-    #                 head_rows=HEAD_ROWS_DEFAULT,
-    #             )
-    #             final_classification_code = classification_code_after_pivot
-    #             final_llm_summary_json = raw_json_after_pivot
-    #             final_generated_code_to_apply = generated_code_after_pivot
-        
-    #     # Apply the *final* generated cleanup code (if any) to the *current* df_orig
-    #     cleanup_applied_successfully = False
-    #     if final_generated_code_to_apply:
-    #         print(f"\nApplying final generated cleanup code to the dataset (current classification: {final_classification_code})...")
-    #         try:
-    #             # The generated code expects the DataFrame to be named 'df'.
-    #             # We execute it in a context where 'df' is our current df_orig.
-    #             # df_orig is modified in place by the exec call.
-    #             exec_globals = {'pd': pd, 'df': df_orig} 
-    #             await run_in_threadpool(exec, final_generated_code_to_apply, exec_globals)
-    #             print("Successfully applied final generated cleanup code to df_orig.")
-    #             cleanup_applied_successfully = True
-    #         except Exception as e:
-    #             print(f"🚨 Error applying final generated cleanup code to df_orig: {e}")
-    #             traceback.print_exc()
-    #             # If code application fails, df_orig might be in an inconsistent state.
-    #             # The original df_orig (before this step) is not preserved unless copied before exec.
-    #             # For now, we proceed with the potentially modified (or error-state) df_orig.
-        
-    #     # Update self.dataset from the final state of df_orig
-    #     self.dataset = df_orig.to_dict(orient="records")
-    #     print(f"\nFinal self.dataset updated with {len(self.dataset)} records.")
-
-    #     # 3️⃣ Profile (original or potentially pivoted/cleaned df_orig)
-    #     self.profile_original = self._build_profile(df_orig)
-
-    #     # 4️⃣ Build cleanup plan (based on the final state of df_orig)
-    #     plan_payload = CleanupPlanRequest(
-    #         data_profile=DataProfile(**self.profile_original),
-    #         drop_null_threshold=drop_null_threshold,
-    #     )
-    #     cleanup_plan_result = self.cleanup_plan(plan_payload) # Corrected variable name
-
-    #     # Reset synthetic state (if these attributes exist on self)
-    #     if hasattr(self, 'synthetic_dataset'):
-    #         self.synthetic_dataset = None
-    #     if hasattr(self, 'profile_synthetic'):
-    #         self.profile_synthetic = None
-
-    #     return {
-    #         "message": "Data uploaded, processed, and profiled.",
-    #         "classification_final": final_classification_code or "NONE",
-    #         "llm_summary_json_final": final_llm_summary_json, # This is the raw JSON string
-    #         "cleanup_code_generated_and_applied": cleanup_applied_successfully,
-    #         "row_count": len(df_orig),
-    #         "column_count": len(df_orig.columns),
-    #         "profile": self.profile_original,
-    #         "cleanup_plan": cleanup_plan_result["plan"], # Use the corrected variable
-    #     }
     # --------------------  CLEANUP + synth in one step ------------- #
     def apply_cleanup_then_synthesize(
         self,
@@ -520,13 +370,7 @@ class DataAnalysisService:
         2. Build synthetic data + synthetic profile
         3. Return both cleaned original and synthetic metadata
         """
-        # if self.dataset is None:
-        #     raise HTTPException(status_code=400, detail="Upload data first.")
-        #     synth = SimpleTabularSynth(
-        #     seed=42
-        #     ).fit(df_real)
-    # synth = SimpleTabularSynth(seed=42).fit(df_real)
-        # df_fake = synth.sample(len(df_real)) 
+
         exec_payload = CleanupExecuteRequest(actions=actions)
         cleanup_result = self.cleanup_execute(exec_payload)
 
@@ -564,6 +408,24 @@ class DataAnalysisService:
             "row_count": int(len(df_synth)),        # make sure these are plain ints
             "column_count": int(df_synth.shape[1]),
             "preview": preview,
+        }
+    
+    def process_anonymized_data(self, data: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Receives client-generated anonymized data, loads it into a DataFrame,
+        and performs backend analysis like profiling.
+        """
+        # Convert the received JSON data into a pandas DataFrame
+        df_anonymized = pd.DataFrame(data)
+
+        # --- Replicate original logic on the new data ---
+        # Cache the received dataset and profile it
+        self.synthetic_dataset = df_anonymized.to_dict(orient="records")
+        self.profile_synthetic = self._build_profile(df_anonymized) # Assumes _build_profile exists
+
+        # Return a success response
+        return {
+            "message": f"Successfully received and processed {len(df_anonymized)} rows of anonymized data."
         }
      
     def profile_data(self) -> Dict[str, Any]:
@@ -812,417 +674,6 @@ class DataAnalysisService:
         except Exception as exc:
             return {"result": f"Error executing code: {exc}\n{traceback.format_exc()}"}
 
-    # --------------------  SUMMARISE EXECUTION -------------------- #
-#     def summarize(self, payload: SummarizePayload) -> Dict[str, Any]:
-#         raw_output = (
-#             payload.execution_result.strip()
-#             if isinstance(payload.execution_result, str)
-#             else json.dumps(payload.execution_result)
-#         )
-#         try:
-#             parsed = json.loads(raw_output)
-#         except json.JSONDecodeError:
-#             raise HTTPException(status_code=400, detail="Execution result is not valid JSON.")
-
-#         analysis_data = parsed.get("analysis_data", {})
-#         chart_data = parsed.get("chart_data")
-
-#         system_msg = {
-#             "role": "system",
-#             "content": (
-#                 "You are a data analysis assistant.Anaylzing data using python code and creating chart_data to to be used in plotting charts in chart js Return JSON with keys "
-#                 "'summary', 'parameterized_summary', and 'enhanced_code' only."
-#             ),
-#         }
-#         user_msg = {
-#             "role": "user",
-#             "content": f"""
-# Original code:
-# {payload.code}
-
-# analysis_data: {analysis_data}
-# chart_data: {chart_data}
-# User question: {payload.question or ''}
-
-# Return valid JSON with keys summary, parameterized_summary, enhanced_code.
-# """,
-#         }
-
-#         resp = self.client.chat.completions.create(model="gpt-4o", messages=[system_msg, user_msg], temperature=0)
-#         ai_text = resp.choices[0].message.content.strip().lstrip("```json").strip("```").strip()
-
-#         try:
-#             return json.loads(ai_text)
-#         except json.JSONDecodeError:
-#             raise HTTPException(status_code=500, detail=f"ChatGPT returned invalid JSON:\n{ai_text}")
-
-#     # --------------------  GPT‑DRIVEN ANALYSIS -------------------- #
-# #     def analyze(self, req: DataFrameRequest) -> Dict[str, Any]:
-# #         df = self._get_df(req.data)
-# #         cols = ", ".join(df.columns)
-# #         prompt = f"""
-# # We have a DataFrame 'df' with {len(df)} rows and {len(df.columns)} columns.
-# # Columns in df: {cols}
-# # Head:
-# # {df.head()}
-# # User question: {req.question or ''}
-
-# # Generate Python code that prints:
-# # json.dumps({{"analysis_data": stats, "chart_data": chart_data}})
-# # Return raw JSON: {{ "code": "..." }}
-# # """
-# #         sys_msg = {"role": "system", "content": "Respond with raw JSON containing only key 'code'."}
-# #         user_msg = {"role": "user", "content": prompt}
-
-# #         resp = self.client.chat.completions.create(model="gpt-4o", messages=[sys_msg, user_msg], temperature=0)
-# #         txt = resp.choices[0].message.content.strip().lstrip("```json").strip("```").strip()
-# #         try:
-# #             return {"openai_result": json.loads(txt)}
-# #         except json.JSONDecodeError:
-# #             return {"openai_result": {"code": None, "error": txt}}
-#     # def analyze(self, req: DataFrameRequest) -> Dict[str, Any]:
-#     #     if self.synthetic_dataset is None:
-#     #         raise HTTPException(
-#     #             status_code=400,
-#     #             detail="Synthetic dataset not found – run /generate_synthetic first."
-#     #         )
-
-#     #     import pandas as pd
-#     #     df = pd.DataFrame(self.synthetic_dataset)
-
-#     #     prompt = f"""
-#     # You are given **df**, an existing pandas DataFrame (shape {df.shape[0]}×{df.shape[1]}).
-
-#     # **TASK**: Write Python that
-#     # • leaves df untouched  
-#     # • builds:  stats  (any useful summary)  
-#     #             chart_data = list(df.to_dict("records"))[:500]  
-#     # • ends with  
-#     #         import json, sys  
-#     #         json.dumps({{"analysis_data": stats, "chart_data": chart_data}}, sys.stdout)  
-
-#     # Return raw JSON {{ "code": "..." }} – nothing else.
-#     # """.strip()
-
-#     #     system_msg = {"role": "system",
-#     #                 "content": "Return ONLY valid JSON with key 'code'."}
-#     #     resp = self.client.chat.completions.create(
-#     #         model="gpt-4o",
-#     #         messages=[system_msg, {"role": "user", "content": prompt}],
-#     #         temperature=0,
-#     #     )
-#     #     txt = resp.choices[0].message.content.strip().lstrip("```json").rstrip("```").strip()
-
-#     #     try:
-#     #         code = json.loads(txt)["code"]
-#     #     except Exception:
-#     #         code = ""
-
-#     #     # ------------------------------------------------------------------ #
-#     #     #  Auto-wrap if GPT forgot the boiler-plate                           #
-#     #     # ------------------------------------------------------------------ #
-#     #     required = ("analysis_data", "chart_data")
-#     #     has_keys = all(k in code for k in required)
-#     #     has_io   = ("json.dump(" in code) or ("json.dumps(" in code)
-#     #     if not (has_keys and has_io):
-#     #         code = f"""
-#     # import json, sys
-#     # # --- user code begins ---
-#     # {code}
-#     # # --- user code ends ---
-
-#     # try:
-#     #     # If stats/chart_data defined by user, use them; otherwise fallback
-#     #     stats       = stats if 'stats' in locals() else {{}}
-#     #     chart_data  = chart_data if 'chart_data' in locals() else list(df.to_dict("records"))[:500]
-#     # except Exception:
-#     #     stats, chart_data = {{}}, list(df.to_dict("records"))[:500]
-
-#     # json.dump({{"analysis_data": stats, "chart_data": chart_data}}, sys.stdout)
-#     # """.strip()
-
-#     #     return {"openai_result": {"code": code}}
-#     def analyze(self, req: DataFrameRequest) -> Dict[str, Any]:
-#         """
-#         • Prompts GPT-4o for code that analyses *self.synthetic_dataset*.
-#         • Always appends a wrapper that
-#             – provides fall-backs if `stats` / `chart_data` are missing
-#             – writes JSON to stdout with sys.stdout.write(...).
-#         """
-#         if self.synthetic_dataset is None:
-#             raise HTTPException(
-#                 status_code=400,
-#                 detail="Synthetic dataset not found – generate it first."
-#             )
-
-#         import pandas as pd
-#         df_syn = pd.DataFrame(self.synthetic_dataset)
-
-#         prompt = f"""
-#     You have **df** (synthetic data, shape {df_syn.shape[0]}×{df_syn.shape[1]}).
-
-#     Write Python that:
-#     • leaves df unchanged
-#     • builds  stats  (summary) and  chart_data = list(df.to_dict("records"))[:500]
-#     Return JSON {{ "code": "..." }} – nothing else.
-#     """.strip()
-
-#         resp = self.client.chat.completions.create(
-#             model="gpt-4o",
-#             messages=[{"role": "system", "content": "Return ONLY JSON {\"code\": ...}"},
-#                     {"role": "user", "content": prompt}],
-#             temperature=0,
-#         )
-
-#         # ------------- extract raw code from GPT ------------------------- #
-#         try:
-#             user_code = json.loads(
-#                 resp.choices[0].message.content
-#                 .strip().lstrip("```json").rstrip("```").strip()
-#             )["code"]
-#         except Exception:
-#             user_code = ""
-
-#         # ------------- unconditional wrapper ----------------------------- #
-#         wrapped_code = f"""
-#     # ----------------  USER CODE  ----------------
-#     {user_code}
-#     # --------------  AUTO-WRAPPER  ---------------
-#     import json, sys
-#     if 'stats' not in locals():
-#         stats = {{}}
-#     if 'chart_data' not in locals():
-#         chart_data = list(df.to_dict("records"))[:500]
-#     sys.stdout.write(
-#         json.dumps({{"analysis_data": stats, "chart_data": chart_data}})
-#     )
-#     """.strip()
-
-#         return {"openai_result": {"code": wrapped_code}}
-
-#     # ------------------------------------------------------------------ #
-#     #  CODE CORRECTION – add explicit JSON guidance when needed          #
-#     # ------------------------------------------------------------------ #
-#     def correct_code(
-#         self,
-#         original_code: str,
-#         error_message: str,
-#         df_head: pd.DataFrame,
-#         row_count: int,
-#         col_count: int,
-#         user_question: str,
-#     ) -> Dict[str, Any]:
-#         # extra hint when JSON parse failed
-#         extra_hint = ""
-#         if "not valid JSON" in error_message or "Expecting value" in error_message:
-#             extra_hint = (
-#                 "\n\nThe code must finish with:\n"
-#                 "    import json, sys\n"
-#                 "    json.dump({'analysis_data': stats, 'chart_data': chart_data}, sys.stdout)\n"
-#                 "and stats/chart_data must be defined."
-#             )
-
-#         sys_msg = {
-#             "role": "system",
-#             "content": "Fix the code. Return JSON with key 'code' only, no commentary.",
-#         }
-#         user_msg = {
-#             "role": "user",
-#             "content": f"""
-#     Error:
-#     {error_message}
-
-#     Original code:
-#     {original_code}
-
-#     DataFrame: {row_count} rows, {col_count} columns: {", ".join(df_head.columns)}
-#     User question: {user_question}{extra_hint}
-
-#     Return raw JSON: {{ "code": "fixed code" }}
-#     """,
-#         }
-
-#         resp = self.client.chat.completions.create(
-#             model="gpt-4o", messages=[sys_msg, user_msg], temperature=0
-#         )
-#         txt = resp.choices[0].message.content.strip().lstrip("```json").rstrip("```").strip()
-#         try:
-#             return {"openai_result": json.loads(txt)}
-#         except json.JSONDecodeError:
-#             return {"openai_result": {"code": None, "error": txt}}
-#     # --------------------  FULL  ANALYSIS  -------------------- #
-#     # async def full_analysis(self, req: DataFrameRequest) -> Dict[str, Any]:
-#     #     analysis_resp = self.analyze(req)
-#     #     code = analysis_resp["openai_result"].get("code")
-#     #     print(code)
-#     #     if not code:
-#     #         raise HTTPException(status_code=500, detail="GPT did not return valid code.")
-
-#     #     df = self._get_df(req.data)
-#     #     df_head = df.head()
-#     #     (print("df_head:", df_head))
-#     #     row_cnt, col_cnt = len(df), len(df.columns)
-#     #     question = req.question or ""
-#     #     max_attempts = 5
-
-#     #     async def run_with_correction(code_snippet: str):
-#     #         cur = code_snippet
-#     #         for _ in range(max_attempts):
-#     #             exec_resp = await self.execute_code(ExecuteCodeWithDataPayload(code=cur))
-#     #             result = exec_resp["result"]
-#     #             if isinstance(result, str) and result.startswith("Error executing code:"):
-#     #                 corr_resp = self.correct_code(cur, result, df_head, row_cnt, col_cnt, question)
-#     #                 cur = corr_resp["openai_result"].get("code") or cur
-#     #                 continue
-#     #             return result
-#     #         return f"Error executing code: Exhausted attempts: {result}"
-
-#     #     result_val = await run_with_correction(code)
-#     #     if isinstance(result_val, str) and result_val.startswith("Error executing code:"):
-#     #         raise HTTPException(status_code=500, detail=result_val)
-
-#     #     summary = self.summarize(SummarizePayload(execution_result=result_val, code=code, question=req.question))
-#     #     enhanced_code = summary.get("enhanced_code")
-#     #     if enhanced_code:
-#     #         final_val = await run_with_correction(enhanced_code)
-#     #         if isinstance(final_val, str) and final_val.startswith("Error executing code:"):
-#     #             raise HTTPException(status_code=500, detail=final_val)
-#     #         final_json = json.loads(final_val) if isinstance(final_val, str) else final_val
-#     #     else:
-#     #         final_json = json.loads(result_val) if isinstance(result_val, str) else result_val
-
-#     #     final_json.update(
-#     #         {
-#     #             "summary": summary.get("summary"),
-#     #             "parameterized_summary": summary.get("parameterized_summary"),
-#     #             "generated_code": enhanced_code or code,
-#     #         }
-#     #     )
-#     #     print(final_json["parameterized_summary"])
-#     #     return final_json
-#     async def full_analysis(self, req: DataFrameRequest) -> Dict[str, Any]:
-#         """
-#         1) Ask GPT-4o for analysis code (targets *synthetic* dataset).
-#         2) Execute with auto-correction (also on *synthetic* data).
-#         3) Summarise and return a single JSON blob.
-#         """
-
-#         if self.synthetic_dataset is None:
-#             raise HTTPException(
-#                 status_code=400,
-#                 detail="Synthetic dataset not found – generate it first."
-#             )
-
-#         # 1) get code
-#         analysis_resp = self.analyze(req)
-#         print("analysis_resp:", analysis_resp)
-#         code = analysis_resp.get("openai_result", {}).get("code")
-#         if not code:
-#             raise HTTPException(status_code=500,
-#                                 detail="GPT did not supply code.")
-
-#         # 2) build df_head etc. from the synthetic dataset
-#         df_syn   = pd.DataFrame(self.synthetic_dataset)
-#         df_head  = df_syn.head()
-#         row_cnt  = len(df_syn)
-#         col_cnt  = len(df_syn.columns)
-#         question = req.question or ""
-#         max_tries = 5
-
-#         async def try_execute(cur_code: str) -> str:
-#             """Run code on the synthetic dataset; auto-correct if needed."""
-#             for attempt in range(1, max_tries + 1):
-#                 print(f"[exec attempt {attempt}]")
-#                 exec_resp = await self.execute_code(
-#                     ExecuteCodeWithDataPayload(
-#                         code=cur_code,
-#                         data=self.synthetic_dataset     # ← pass synthetic
-#                     )
-#                 )
-#                 result = exec_resp["result"]
-
-#                 try:                                   # must be JSON
-#                     _ = json.loads(result) if isinstance(result, str) else result
-#                     print("[exec ok]")
-#                     return result
-#                 except Exception as err:
-#                     print("[exec bad] not JSON:", err)
-#                     corr = self.correct_code(
-#                         cur_code, str(err), df_head,
-#                         row_cnt, col_cnt, question
-#                     )
-#                     cur_code = corr.get("openai_result", {}).get("code") or cur_code
-#             return "Error executing code: exhausted correction attempts."
-
-#         # 3) run (with corrections)
-#         result_val = await try_execute(code)
-#         if isinstance(result_val, str) and result_val.startswith("Error executing"):
-#             raise HTTPException(status_code=500, detail=result_val)
-
-#         # 4) summarise / enhance
-#         summary = self.summarize(
-#             SummarizePayload(execution_result=result_val,
-#                              code=code,
-#                              question=req.question)
-#         )
-#         enhanced_code = summary.get("enhanced_code")
-#         if enhanced_code:
-#             result_val = await try_execute(enhanced_code)
-#             if isinstance(result_val, str) and result_val.startswith("Error executing"):
-#                 raise HTTPException(status_code=500, detail=result_val)
-
-#         # 5) final packaging
-#         final_json = (json.loads(result_val)
-#                       if isinstance(result_val, str) else result_val)
-
-#         if "chart_data" not in final_json or "analysis_data" not in final_json:
-#             raise HTTPException(status_code=500,
-#                                 detail="analysis code did not produce required keys.")
-
-#         final_json.update({
-#             "summary":               summary.get("summary"),
-#             "parameterized_summary": summary.get("parameterized_summary"),
-#             "generated_code":        enhanced_code or code,
-#         })
-#         return final_json # async def llm_free_analysis(self, req: LLMFreeAnalysisRequest) -> Dict[str, Any]:
-#     #     """method to run the code generated by the llm in an llm free environment"""
-#     #     exec_resp = await self.execute_code(ExecuteCodeWithDataPayload(code=req.code, data=req.data))
-#     #     result = exec_resp["result"]
-#     #     parsed = json.loads(result) if isinstance(result, str) else result
-#     #     print(parsed)
-#     #     return {
-#     #         "parameterized_summary": parsed.get("parameterized_summary"),
-#     #         "chart_data": parsed.get("chart_data"),
-#     #         "analysis_data": {k: v for k, v in parsed.items() if k not in {"parameterized_summary", "chart_data"}},
-#     #     }
-#     async def llm_free_analysis(self,
-#                                 req: LLMFreeAnalysisRequest) -> Dict[str, Any]:
-#         """
-#         Execute previously-generated code against **self.dataset** –
-#         no LLM involvement.
-#         """
-#         if self.dataset is None:
-#             raise HTTPException(
-#                 status_code=400,
-#                 detail="No original dataset loaded – upload data first."
-#             )
-
-#         exec_resp = await self.execute_code(
-#             ExecuteCodeWithDataPayload(code=req.code,
-#                                        data=self.dataset)   # <-- original!
-#         )
-
-#         result = exec_resp["result"]
-#         parsed = json.loads(result) if isinstance(result, str) else result
-
-#         return {
-#             "parameterized_summary": parsed.get("parameterized_summary"),
-#             "chart_data":           parsed.get("chart_data"),
-#             "analysis_data": {k: v for k, v in parsed.items()
-#                               if k not in {"parameterized_summary",
-#                                            "chart_data"}},
-#         }
-
 
     def summarize(self, payload: SummarizePayload) -> Dict[str, Any]:
             raw_output = (
@@ -1302,6 +753,18 @@ class DataAnalysisService:
         num_rows = len(df)
         num_cols = len(df.columns)
 
+
+        history_parts = []
+        for turn in req.chat_history:
+            turn_str = f"User: {turn.question}\nAssistant: {turn.answer}"
+            if turn.code:
+                # Use markdown code fences for clarity
+                turn_str += f"\nAssistant's Code:\n```python\n{turn.code}\n```"
+            history_parts.append(turn_str)
+
+        # Join turns with a separator to make the history log clear
+        history_str = "\n---\n".join(history_parts)
+
         prompt = f"""
 You are a data analysis assistant. Your task is to generate Python code to analyze a pandas DataFrame named 'df'.
 The DataFrame 'df' has {num_rows} rows and {num_cols} columns.
@@ -1311,17 +774,16 @@ Sample Data (up to the first 10 rows of 'df' for schema understanding only):
 {sample_data_to_show}
 Please note: The number of rows shown in this sample IS NOT an instruction on how many results your Python code should return, unless the user's question specifically refers to this sample size.
 
-User question: "{req.question or 'Perform a general descriptive analysis.'}"
-
 IMPORTANT INSTRUCTIONS FOR PYTHON CODE GENERATION:
 1.  **Adhere to User-Specified Item Counts:** If the user's question asks for a specific number of items (e.g., "top 10 customers"), your Python code MUST produce exactly that number of items. Use methods like `df.nlargest(10, 'some_column')` or `df.head(10)`. If the dataset has fewer items than requested, return all available items.
 2.  **Output Format:** The Python code you generate MUST print a single JSON string to standard output. This JSON string must be the *only* thing printed. The JSON string must contain three top-level keys:
-    * `"analysis_data"`: A Python dictionary containing the raw data points for the analysis (statistics, lists of items, etc.). The keys in this dictionary will be used to fill the placeholders in the `parameterized_answer`.
-    * `"chart_data"`: A Python dictionary formatted specifically for ECharts, containing data for plotting (e.g., series, axes data).
-    * `"parameterized_answer"`: A string that acts as a template for the final textual summary. It should answer the user's question using placeholders in curly braces (e.g., `{{some_value}}`) that correspond to keys in `analysis_data`.
-3.  **No Direct Plotting:** Do NOT include any Python code that attempts to display or render plots itself (e.g., avoid `matplotlib.pyplot.show()`).
-4.  **Available Libraries:** Assume `pandas` (imported as `pd`) and `json` are available.
-5.  **DataFrame Name:** The pandas DataFrame will be available under the variable name `df`.
+    * `"analysis_data"`: A Python dictionary containing the raw data points for the analysis.
+    * `"chart_data"`: A Python dictionary formatted specifically for ECharts.
+    * `"parameterized_answer"`: A string that acts as a template for the final textual summary, using placeholders like `{{some_value}}`.
+3.  **CRITICAL: Use the NumpyEncoder for JSON Serialization:** To prevent `TypeError` exceptions from numpy data types (like `int64`), your code MUST define and use a custom `NumpyEncoder` class. The final `print()` statement must call `json.dumps` with `cls=NumpyEncoder`. Follow the example below exactly.
+4.  **No Direct Plotting:** Do NOT include any Python code that attempts to display or render plots itself (e.g., avoid `matplotlib.pyplot.show()`).
+5.  **Available Libraries:** Assume `pandas` (as `pd`), `json`, and `numpy` (as `np`) are available.
+6.  **DataFrame Name:** The pandas DataFrame will be available under the variable name `df`.
 
 Example of the required JSON output format from the generated Python script:
 ```json
@@ -1341,10 +803,23 @@ Example of the required JSON output format from the generated Python script:
   "parameterized_answer": "The analysis reviewed {{num_products}} products. The top-selling product is '{{top_product}}' with sales of {{top_product_sales}}. The average sales across all products is {{mean_sales}}."
 }}
 Your response (as the LLM assistant generating the code) MUST be a raw JSON object containing only one key: "code". The value for this key should be the complete Python script as a string.
+
 Example of YOUR response format:
 {{{{
-  "code": "import json\\nimport pandas as pd\\n\\n# df is pre-defined. Example: User asked for 'top 3 countries by population'\\n\\n# Analysis\\nN = 3\\nresult_df = df.nlargest(N, 'population')\\nmean_pop = df['population'].mean()\\ncountry_count = df['country'].nunique()\\ntop_country_name = result_df.iloc[0]['country']\\ntop_country_pop = int(result_df.iloc[0]['population']) # Use native python types for JSON\\n\\n# Data for the final JSON output\\nanalysis_data_dict = {{\\n    'top_country': top_country_name,\\n    'top_population': top_country_pop,\\n    'average_population': round(mean_pop, 2),\\n    'total_countries': country_count,\\n    'top_n_count': N\\n}}\\n\\nparameterized_answer_str = \\"Out of {{total_countries}} countries, the most populous is {{top_country}} with {{top_population}} people. The average population is {{average_population}}. This chart shows the top {{top_n_count}} countries.\\"\\n\\nchart_data_for_echarts = {{\\n    'title': {{'text': f'Top {{N}} Countries by Population'}},\\n    'xAxis': {{'type': 'category', 'data': result_df['country'].tolist()}},\\n    'yAxis': {{'type': 'value'}},\\n    'series': [{{'name': 'Population', 'type': 'bar', 'data': result_df['population'].tolist()}}]\\n}}\\n\\n# Final print statement is crucial\\nprint(json.dumps({{\\n    'analysis_data': analysis_data_dict,\\n    'chart_data': chart_data_for_echarts,\\n    'parameterized_answer': parameterized_answer_str\\n}}))"
+  "code": "import json\\nimport pandas as pd\\nimport numpy as np\\n\\n# df is pre-defined. Example: User asked for 'top 3 countries by population'\\n\\n# CRITICAL: Define a robust JSON encoder to handle numpy types\\nclass NumpyEncoder(json.JSONEncoder):\\n    def default(self, obj):\\n        if isinstance(obj, np.integer):\\n            return int(obj)\\n        elif isinstance(obj, np.floating):\\n            return float(obj)\\n        elif isinstance(obj, np.ndarray):\\n            return obj.tolist()\\n        return super(NumpyEncoder, self).default(obj)\\n\\n# Analysis\\nN = 3\\nresult_df = df.nlargest(N, 'population')\\nmean_pop = df['population'].mean()\\ncountry_count = df['country'].nunique()\\ntop_country_name = result_df.iloc[0]['country']\\ntop_country_pop = result_df.iloc[0]['population']\\n\\n# Data for the final JSON output.\\n# No need for manual int() or float() casting here because the Encoder will handle it.\\nanalysis_data_dict = {{\\n    'top_country': top_country_name,\\n    'top_population': top_country_pop,\\n    'average_population': mean_pop,\\n    'total_countries': country_count,\\n    'top_n_count': N\\n}}\\n\\nparameterized_answer_str = \\"Out of {{total_countries}} countries, the most populous is {{top_country}} with {{top_population}} people. The average population is {{average_population}}. This chart shows the top {{top_n_count}} countries.\\"\\n\\nchart_data_for_echarts = {{\\n    'title': {{'text': f'Top {{N}} Countries by Population'}},\\n    'xAxis': {{'type': 'category', 'data': result_df['country'].tolist()}},\\n    'yAxis': {{'type': 'value'}},\\n    'series': [{{'name': 'Population', 'type': 'bar', 'data': result_df['population'].tolist()}}]\\n}}\\n\\n# Final print statement is crucial and MUST use the custom encoder\\nprint(json.dumps({{\\n    'analysis_data': analysis_data_dict,\\n    'chart_data': chart_data_for_echarts,\\n    'parameterized_answer': parameterized_answer_str\\n}}, cls=NumpyEncoder))"
 }}}}
+
+---
+Here is the conversation history for context. The user may be asking a follow-up question
+based on the summary or the code from a previous turn.
+
+--- CONVERSATION HISTORY START ---
+{history_str}
+--- CONVERSATION HISTORY END ---
+
+Based on all the instructions and the history provided above, please respond to the following user question.
+
+User question: "{req.question or 'Perform a general descriptive analysis.'}
 """
         sys_msg = {"role": "system", "content": "Respond with raw JSON containing only key 'code'."}
         user_msg = {"role": "user", "content": prompt}
@@ -1377,22 +852,50 @@ Example of YOUR response format:
         user_msg = {
             "role": "user",
             "content": f"""
-Error:
-{error_message}
+        I will provide an error, the original Python code that caused it, and context about the pandas DataFrame it was running on. Your task is to fix the code and return ONLY a raw JSON object with the single key "code".
 
-Original code that caused the error:
-{original_code}
+        ---
+        EXAMPLE
+        Error:
+        TypeError: can only concatenate str (not "int") to str on column 'A'
 
-DataFrame context: The code will run on a DataFrame 'df' with {row_count} rows and {col_count} columns.
-Column names: {cols}
-DataFrame head:
-{df_head.to_string()}
+        Original code that caused the error:
+        print(df['A'].sum())
 
-User question that the original code was trying to answer: {user_question}
+        DataFrame context: The code will run on a DataFrame 'df' with 10 rows and 2 columns.
+        Column names: A, B
+        DataFrame head:
+        A  B
+        0  1  x
+        1  2  y
+        2  z  z
 
-Return raw JSON: {{ "code": "fixed python code" }}
-The fixed code should print a JSON string to stdout with 'analysis_data' and 'chart_data'.
-""",
+        User question that the original code was trying to answer: "What is the sum of column A?"
+
+        Expected JSON response:
+        {{
+        "code": "df['A'] = pd.to_numeric(df['A'], errors='coerce')\\nprint(df['A'].sum())"
+        }}
+        ---
+
+        Here is the real request.
+
+        Error:
+        {error_message}
+
+        Original code that caused the error:
+        {original_code}
+
+        DataFrame context: The code will run on a DataFrame 'df' with {row_count} rows and {col_count} columns.
+        Column names: {cols}
+        DataFrame head:
+        {df_head.to_string()}
+
+        User question that the original code was trying to answer: {user_question}
+
+        Return raw JSON: {{ "code": "fixed python code" }}
+        The fixed code should print a JSON string to stdout with 'analysis_data' and 'chart_data'.
+        """,
         }
 
         resp = self.client.chat.completions.create(model="gpt-4o", messages=[sys_msg, user_msg], temperature=0)
@@ -1414,16 +917,27 @@ The fixed code should print a JSON string to stdout with 'analysis_data' and 'ch
             """
             # ─────────────────────── sanity checks ───────────────────────
             if self.synthetic_dataset is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Synthetic dataset not available for full_analysis.",
-                )
+                raise HTTPException(status_code=400, detail="Synthetic dataset not available.")
 
-            # ─────────────────── 1) ask LLM to generate code ──────────────
+            # --- SESSION HANDLING LOGIC ---
+            if req.conversation_id and req.conversation_id in self.chat_sessions:
+                # Existing conversation
+                conversation_id = req.conversation_id
+                chat_history = self.chat_sessions[conversation_id]
+            else:
+                # New conversation
+                conversation_id = str(uuid.uuid4())
+                chat_history = []
+                self.chat_sessions[conversation_id] = chat_history
+            # --- END SESSION HANDLING ---
+
             synthetic_req = DataFrameRequest(
                 question=req.question,
                 data=self.synthetic_dataset,
+                # We don't need to pass the ID down, just the retrieved history
+                chat_history=chat_history,
             )
+
             analysis_resp = self.analyze(synthetic_req)
             code = analysis_resp["openai_result"].get("code")
             if not code:
@@ -1529,6 +1043,15 @@ The fixed code should print a JSON string to stdout with 'analysis_data' and 'ch
                     status_code=500,
                     detail="Execution result is not a valid JSON object.",
                 )
+            final_summary = summary_data.get("summary")
+            if final_summary:
+                self.chat_sessions[conversation_id].append(
+                    ChatTurn(
+                        question=req.question,
+                        answer=final_summary,
+                        code=final_code_executed  # Include the code that was executed
+                    )
+                )
 
             return {
                 "summary":               summary_data.get("summary"),
@@ -1536,73 +1059,9 @@ The fixed code should print a JSON string to stdout with 'analysis_data' and 'ch
                 "generated_code":        final_code_executed,
                 "chart_data":            final_json_output.get("chart_data"),
                 "analysis_data":         final_json_output.get("analysis_data"),
+                "conversation_id":       conversation_id,
             }
-            # ───────────── 2) execute initial code (with fixes) ────────────
-            exec_res_initial = await run_with_correction(code, current_q)
-            if isinstance(exec_res_initial, str) and exec_res_initial.startswith("Error executing code:"):
-                raise HTTPException(status_code=500, detail=exec_res_initial)
 
-            # ───────────── 3) summarise initial execution result ───────────
-            summary_data = self.summarize(
-                SummarizePayload(
-                    execution_result=exec_res_initial,
-                    code=code,
-                    question=current_q,
-                )
-            )
-
-            # These variables will hold the artefacts we finally return
-            final_json_output   = (
-                json.loads(exec_res_initial)
-                if isinstance(exec_res_initial, str)
-                else exec_res_initial
-            )
-            final_code_executed = code
-
-            # ───────────── 4) try LLM-provided enhanced_code ───────────────
-            enhanced_code = summary_data.get("enhanced_code")
-            if enhanced_code:
-                print("Full Analysis: executing enhanced code")
-                exec_res_enhanced = await run_with_correction(enhanced_code, current_q)
-
-                enhanced_ok = not (
-                    isinstance(exec_res_enhanced, str)
-                    and exec_res_enhanced.startswith("Error executing code:")
-                )
-
-                if enhanced_ok:
-                    print("Full Analysis: enhanced code succeeded.")
-                    # Re-summarise so placeholders match enhanced output
-                    summary_data = self.summarize(
-                        SummarizePayload(
-                            execution_result=exec_res_enhanced,
-                            code=enhanced_code,
-                            question=current_q,
-                        )
-                    )
-                    final_json_output = (
-                        json.loads(exec_res_enhanced)
-                        if isinstance(exec_res_enhanced, str)
-                        else exec_res_enhanced
-                    )
-                    final_code_executed = enhanced_code
-                else:
-                    print("Full Analysis: enhanced code failed, using initial result.")
-
-            # ───────────── 5) build & return response ──────────────────────
-            if not isinstance(final_json_output, dict):
-                raise HTTPException(
-                    status_code=500,
-                    detail="Execution result is not a valid JSON object.",
-                )
-
-            return {
-                "summary":               summary_data.get("summary"),
-                "parameterized_summary": summary_data.get("parameterized_summary"),
-                "generated_code":        final_code_executed,
-                "chart_data":            final_json_output.get("chart_data"),
-                "analysis_data":         final_json_output.get("analysis_data"),
-            }
 
 
     # --------------------  LLM‑FREE ANALYSIS (on Original Data) -------------------- #

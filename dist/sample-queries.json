@@ -1,0 +1,191 @@
+[
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 49753334.0,
+    "count": 1,
+    "creation_time": "Thu, 13 Feb 2025 07:16:10 GMT",
+    "query": "WITH\n  UserInfo AS (\n    SELECT\n      user_pseudo_id,\n      MAX(IF(event_name IN ('first_visit', 'first_open'), 1, 0)) AS is_new_user\n    FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`\n    WHERE _TABLE_SUFFIX BETWEEN '20201101' AND '20201130'\n    GROUP BY 1\n  )\nSELECT\n  COUNT(*) AS user_count,\n  SUM(is_new_user) AS new_user_count\nFROM UserInfo;",
+    "question": "'How many users visited the website in November 2020, and how many of them were new users?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 23035899.0,
+    "count": 1,
+    "creation_time": "Thu, 13 Feb 2025 07:18:35 GMT",
+    "query": "SELECT\n  EP.key AS event_param_key,\n  COUNT(*) AS occurrences\nFROM\n  `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`, UNNEST(event_params) AS EP\nWHERE\n  _TABLE_SUFFIX BETWEEN '20201201' AND '20201202'\nGROUP BY\n  event_param_key\nORDER BY\n  event_param_key ASC;",
+    "question": "'How many occurrences are there for each event parameter key in the e-commerce events data from December 1st to December 2nd?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 259243376.0,
+    "count": 1,
+    "creation_time": "Thu, 13 Feb 2025 19:10:11 GMT",
+    "query": "WITH\n  Params AS (\n    SELECT 'Google Navy Speckled Tee' AS selected_product\n  ),\n  PurchaseEvents AS (\n    SELECT\n      user_pseudo_id,\n      items\n    FROM\n      `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`\n    WHERE\n      _TABLE_SUFFIX BETWEEN '20201101' AND '20210131'\n      AND event_name = 'purchase'\n  ),\n  ProductABuyers AS (\n    SELECT DISTINCT\n      user_pseudo_id\n    FROM\n      Params,\n      PurchaseEvents,\n      UNNEST(items) AS items\n    WHERE\n      items.item_name = selected_product\n  )\nSELECT\n  items.item_name AS item_name,\n  SUM(items.quantity) AS item_quantity\nFROM\n  Params,\n  PurchaseEvents,\n  UNNEST(items) AS items\nWHERE\n  user_pseudo_id IN (SELECT user_pseudo_id FROM ProductABuyers)\n  AND items.item_name != selected_product\nGROUP BY 1\nORDER BY item_quantity DESC;",
+    "question": "'Which other products were purchased by users who bought the Google Navy Speckled Tee?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 4680856.0,
+    "count": 1,
+    "creation_time": "Thu, 13 Feb 2025 07:17:48 GMT",
+    "query": "WITH\n  UserInfo AS (\n    SELECT\n      user_pseudo_id,\n      COUNTIF(event_name = 'page_view') AS page_view_count,\n      COUNTIF(event_name IN ('in_app_purchase', 'purchase')) AS purchase_event_count\n    FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`\n    WHERE _TABLE_SUFFIX BETWEEN '20201201' AND '20201202'\n    GROUP BY 1\n  )\nSELECT\n  (purchase_event_count > 0) AS purchaser,\n  COUNT(*) AS user_count,\n  SUM(page_view_count) AS total_page_views,\n  SUM(page_view_count) / COUNT(*) AS avg_page_views,\nFROM UserInfo\nGROUP BY 1;",
+    "question": "'How many users made a purchase, what is the total number of users, total page views, and average page views per user from the GA4 obfuscated sample ecommerce data for events occurring between December 1, 2020, and December 2, 2020?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 54430132.0,
+    "count": 1,
+    "creation_time": "Thu, 13 Feb 2025 07:16:35 GMT",
+    "query": "SELECT\n  COUNT(*) / COUNT(DISTINCT user_pseudo_id) AS avg_transaction_per_purchaser\nFROM\n  `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`\nWHERE\n  event_name IN ('in_app_purchase', 'purchase')\n  AND _TABLE_SUFFIX BETWEEN '20201201' AND '20201231';",
+    "question": "'What is the average number of transactions per purchaser for in-app purchases and purchases in December 2020?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": 101.0,
+    "avg_total_bytes_processed": 20481010.000000004,
+    "count": 5,
+    "creation_time": "Thu, 13 Feb 2025 20:06:54 GMT",
+    "query": "SELECT * FROM `foreign-connect-48db5.bqml_tutorial.iowa_liquor_sales_control_and_test` LIMIT 1000",
+    "question": "'What are the first 1000 rows of data from the Iowa liquor sales dataset?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 30015236.0,
+    "count": 1,
+    "creation_time": "Thu, 13 Feb 2025 07:17:09 GMT",
+    "query": "SELECT\n  SUM(\n    (\n      SELECT COALESCE(value.int_value, value.float_value, value.double_value)\n      FROM UNNEST(event_params)\n      WHERE key = 'value'\n    ))\n    AS event_value\nFROM\n  `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`\nWHERE\n  event_name = 'purchase'\n  AND _TABLE_SUFFIX BETWEEN '20201201' AND '20201202';",
+    "question": "'What is the total value of events with the event name \"purchase\" in the e-commerce dataset for December 1st and December 2nd, 2020?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 31124324.0,
+    "count": 1,
+    "creation_time": "Thu, 13 Feb 2025 07:16:54 GMT",
+    "query": "SELECT\n  event_timestamp,\n  (\n    SELECT COALESCE(value.int_value, value.float_value, value.double_value)\n    FROM UNNEST(event_params)\n    WHERE key = 'value'\n  ) AS event_value\nFROM\n  `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`\nWHERE\n  event_name = 'purchase'\n  AND _TABLE_SUFFIX BETWEEN '20201201' AND '20201202';",
+    "question": "'What are the event timestamps and corresponding values for purchases made on December 1st and December 2nd in the GA4 obfuscated sample ecommerce dataset?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 3197785.0,
+    "count": 1,
+    "creation_time": "Thu, 13 Feb 2025 07:15:46 GMT",
+    "query": "SELECT\n  event_date,\n  event_name,\n  COUNT(*) AS event_count\nFROM\n  `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`\nWHERE\n  event_name IN ('page_view', 'session_start', 'purchase')\n  AND _TABLE_SUFFIX BETWEEN '20201201' AND '20201202'\nGROUP BY 1, 2;",
+    "question": "'How many page views, session starts, and purchases occurred on December 1st and December 2nd, grouped by event date and event name?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": 150.0,
+    "avg_total_bytes_processed": 17067508.333333332,
+    "count": 6,
+    "creation_time": "Thu, 13 Feb 2025 20:18:51 GMT",
+    "query": "SELECT * FROM `foreign-connect-48db5.bqml_tutorial.iowa_liquor_sales_control_and_test` LIMIT 100",
+    "question": "'What are the first 100 rows of data from the Iowa liquor sales dataset?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": 188.5,
+    "avg_total_bytes_processed": 27025.0,
+    "count": 4,
+    "creation_time": "Thu, 13 Feb 2025 20:19:11 GMT",
+    "query": "SELECT distinct(is_test) FROM `foreign-connect-48db5.bqml_tutorial.iowa_liquor_sales_control_synth_data` LIMIT 1000",
+    "question": "'What are the unique values of the \"is_test\" column in the Iowa liquor sales dataset?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": 99.0,
+    "avg_total_bytes_processed": 0.0,
+    "count": 2,
+    "creation_time": "Thu, 13 Feb 2025 19:44:05 GMT",
+    "query": "SELECT COUNT(*) FROM `foreign-connect-48db5.bqml_tutorial.iowa_liquor_sales_control_synth_data` LIMIT 1000",
+    "question": "'How many records are there in the Iowa liquor sales dataset?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 450929.5,
+    "count": 2,
+    "creation_time": "Thu, 13 Feb 2025 20:25:43 GMT",
+    "query": "SELECT distinct(is_test) FROM `foreign-connect-48db5.bqml_tutorial.iowa_liquor_sales_control_and_test` LIMIT 1000",
+    "question": "'What are the unique values found in the \"is_test\" column in the Iowa liquor sales dataset?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 0.0,
+    "count": 1,
+    "creation_time": "Thu, 13 Feb 2025 20:25:55 GMT",
+    "query": "SELECT count(*) FROM `foreign-connect-48db5.bqml_tutorial.iowa_liquor_sales_control_and_test` LIMIT 1000",
+    "question": "'How many records are there in the Iowa liquor sales dataset?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 48000.0,
+    "count": 1,
+    "creation_time": "Thu, 13 Feb 2025 19:52:16 GMT",
+    "query": "SELECT max(total_sales) FROM `foreign-connect-48db5.bqml_tutorial.iowa_liquor_sales_control_synth_data` LIMIT 1000",
+    "question": "'What is the maximum total sales amount from the Iowa liquor sales dataset?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 7214872.0,
+    "count": 1,
+    "creation_time": "Thu, 13 Feb 2025 19:51:47 GMT",
+    "query": "SELECT max(total_sales) FROM `foreign-connect-48db5.bqml_tutorial.iowa_liquor_sales_control_and_test` LIMIT 1000",
+    "question": "'What is the maximum total sales amount from the Iowa liquor sales dataset?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": null,
+    "count": 1,
+    "creation_time": "Sat, 08 Feb 2025 06:30:48 GMT",
+    "query": "SELECT * FROM `foreign-connect-48db5._285bbed2427f1900428425d1f9445d8a9d8b7062.anonb55c029b_5daa_47c0_b68a_b53734f5f56a` ORDER BY `optimization_details` DESC",
+    "question": "'What are the results when sorting all entries by optimization details in descending order?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": null,
+    "count": 1,
+    "creation_time": "Sat, 08 Feb 2025 06:30:30 GMT",
+    "query": "SELECT * FROM `foreign-connect-48db5._285bbed2427f1900428425d1f9445d8a9d8b7062.anon260a497d_c29a_4b9e_b669_95034260a8a5` ORDER BY `optimization_details` ASC",
+    "question": "'Can you list all the records from the dataset and sort them in ascending order based on optimization details?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": 34.0,
+    "avg_total_bytes_processed": 0.0,
+    "count": 1,
+    "creation_time": "Sat, 08 Feb 2025 06:15:30 GMT",
+    "query": "SELECT TRUE as check",
+    "question": "'What value is returned as \"check\" in the result?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 1304946.0,
+    "count": 1,
+    "creation_time": "Sat, 08 Feb 2025 06:25:20 GMT",
+    "query": "SELECT * FROM `foreign-connect-48db5._285bbed2427f1900428425d1f9445d8a9d8b7062.anonf2ec1e83_2d6e_4e2d_bf39_ae32d9289b2a` ORDER BY `job_type` ASC",
+    "question": "'How are the entries in the table sorted by job type?'",
+    "statement_type": "SELECT"
+  },
+  {
+    "avg_execution_time": null,
+    "avg_total_bytes_processed": 1304946.0,
+    "count": 1,
+    "creation_time": "Sat, 08 Feb 2025 06:25:25 GMT",
+    "query": "SELECT * FROM `foreign-connect-48db5._285bbed2427f1900428425d1f9445d8a9d8b7062.anonf2ec1e83_2d6e_4e2d_bf39_ae32d9289b2a` ORDER BY `job_type` DESC",
+    "question": "'What is the list of entries sorted by job type in descending order?'",
+    "statement_type": "SELECT"
+  }
+]
