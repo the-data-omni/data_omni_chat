@@ -14,12 +14,9 @@ All endpoints can work with either:
   2. the dataset that was previously uploaded via /upload_data
 ------------------------------------------------------------------
 """
-import base64
 import io
 import json
 import math
-import os
-import re
 import traceback
 import uuid
 from contextlib import redirect_stdout
@@ -27,45 +24,19 @@ from typing import Any, Dict, List, Optional
 
 # Third-party imports
 import numpy as np
-import openai
 import pandas as pd
-from dataprofiler import Profiler
+from app.services.llm_providers import (AnthropicProvider, GoogleProvider,
+                                        LLMProvider, OpenAIProvider)
 from dotenv import load_dotenv
-from fastapi import HTTPException, UploadFile
-from fastapi.concurrency import run_in_threadpool
-from openai import OpenAI
+from fastapi import HTTPException
 
-from app.synthetic_generator.generate_fake_data import fake_preview_df
-from app.synthetic_generator.light_weight_synth import SimpleTabularSynth
+MAX_ATTEMPTS_DEFAULT = 5
 
-# Local application/library specific imports
-try:
-    from app.classifier.cleanup import \
-        OPENAI_MODEL_DEFAULT  # Assuming these constants are also in cleanup.py or its config
-    from app.classifier.cleanup import (  # Other necessary functions like visualize_hidden_chars, etc., if they are not; part of main_analysis_and_cleanup_pipeline's internal workings or are also needed here.; For this example, we assume main_analysis_and_cleanup_pipeline is self-contained; or handles its own dependencies from app.classifier.cleanup.
-        HEAD_ROWS_DEFAULT, IMG_PATH_DEFAULT, MAX_ATTEMPTS_DEFAULT,
-        main_analysis_and_cleanup_pipeline)
-except ImportError as e:
-    print(f"Error importing from app.classifier.cleanup: {e}")
-    print("Please ensure app/classifier/cleanup.py exists and is in the PYTHONPATH.")
-    # Define fallbacks or raise error if critical
-    IMG_PATH_DEFAULT = "table_screenshot.png"
-    HEAD_ROWS_DEFAULT = 20
-    OPENAI_MODEL_DEFAULT = "gpt-4o"
-    MAX_ATTEMPTS_DEFAULT = 5
-    async def main_analysis_and_cleanup_pipeline(*args, **kwargs): # Fallback dummy
-        print("Warning: main_analysis_and_cleanup_pipeline could not be imported. Using dummy function.")
-        return "FALLBACK_CLASSIFICATION", "FALLBACK_JSON_SUMMARY", "FALLBACK_CLEANUP_CODE"
-
-from app.cleanup.clean_multivalue import generalize_csv_restructure
-from app.cleanup.clean_pivot import restructure_pivoted_csv_v3
-from app.models.schemas import (CleanupAction, CleanupExecuteRequest,
-                                CleanupPlanRequest, DataFrameRequest,
-                                DataProfile, ExecuteCodeWithDataPayload,
-                                LLMFreeAnalysisRequest, SummarizePayload, ChatTurn)
+from app.models.schemas import (ChatTurn, DataFrameRequest,
+                                ExecuteCodeWithDataPayload, SummarizePayload)
 
 
-def _sanitize_nan(obj):             # paste the helper here
+def _sanitize_nan(obj):           
     if isinstance(obj, dict):
         return {k: _sanitize_nan(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -76,9 +47,6 @@ def _sanitize_nan(obj):             # paste the helper here
     return obj
 
 
-# ------------------------------------------------------------------#
-#                    ---------  Service class  ---------            #
-# ------------------------------------------------------------------#
 class DataAnalysisService:
     """
     Central point for every operation.
@@ -89,15 +57,49 @@ class DataAnalysisService:
 
     def __init__(self) -> None:
         load_dotenv()
-        openai.api_key = os.getenv("OPENAI_API_KEY")
-        self.client = OpenAI(api_key=openai.api_key)
         self.dataset: Optional[List[Dict[str, Any]]] = None  # persistent store
         self.synthetic_dataset: Optional[List[Dict[str, Any]]] = None 
         self.profile_original: Optional[Dict[str, Any]] = None
         self.profile_synthetic: Optional[Dict[str, Any]] = None
         self.csv_path: Optional[str] = None
         self.chat_sessions: Dict[str, List[ChatTurn]] = {}
+        self.providers: Dict[str, LLMProvider] = {
+            "openai": OpenAIProvider(),
+            "google": GoogleProvider(),
+            "anthropic": AnthropicProvider(),
+        }
 
+    def _get_provider_for_model(self, model_name: str) -> LLMProvider:
+        """Selects the correct provider based on the model name prefix."""
+        if model_name.startswith("gpt"):
+            return self.providers["openai"]
+        elif model_name.startswith("gemini"):
+            return self.providers["google"]
+        elif model_name.startswith("claude"):
+            return self.providers["anthropic"]
+        else:
+            # Default to OpenAI or raise an error
+            raise ValueError(f"Unsupported model provider for model: {model_name}")
+
+    async def check_llm_connection(self, model_name: str, api_key: str) -> Dict[str, Any]:
+        """
+        Attempts a low-cost operation with the provider to verify the key and model access.
+        """
+        print(f"--- Verifying connection for model: {model_name} ---")
+        try:
+            provider = self._get_provider_for_model(model_name)
+            # We'll delegate the actual check to the provider instance
+            is_successful, message = await provider.verify_connection(model=model_name, api_key=api_key)
+
+            if is_successful:
+                return {"status": "success", "message": message}
+            else:
+                raise Exception(message)
+
+        except Exception as e:
+            print(f"!!! Connection check failed: {e}")
+            # Re-raise to be caught by the route handler, which will return a 400 error
+            raise e
     # --------------------  Internal helpers  -------------------- #
     def _get_df(self, data: Optional[List[Dict[str, Any]]]) -> pd.DataFrame:
         """
@@ -125,291 +127,6 @@ class DataAnalysisService:
             )
         )
 
-    async def upload_data(
-        
-        self,
-        *,
-        file: Optional[UploadFile] = None, # Changed Any to UploadFile
-        json_rows: Optional[List[Dict[str, Any]]] = None,
-        drop_null_threshold: float = 0.5,
-        has_header: bool = True, 
-    ) -> Dict[str, Any]:
-        """function that calls cleanup, and updated dataframe in place"""
-        df_orig: Optional[pd.DataFrame] = None
-
-        if file:
-            if not file.filename: # Basic validation
-                raise HTTPException(status_code=400, detail="Uploaded file has no filename.")
-
-            os.makedirs("uploads", exist_ok=True)
-            # Use the actual filename from the UploadFile object
-            base_filename, file_extension = os.path.splitext(file.filename)
-            # Sanitize filename slightly or use a completely random one to avoid issues
-            # For simplicity, using uuid with original extension
-            fname = f"{uuid.uuid4().hex}{file_extension}"
-            path = os.path.join("uploads", fname)
-
-            try:
-                # Read contents from the UploadFile object
-                contents = await file.read()
-                if not contents:
-                    raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-            except Exception as e:
-                # Handle potential errors during file read (though await file.read() itself might raise)
-                print(f"Error reading uploaded file content: {e}")
-                traceback.print_exc()
-                raise HTTPException(status_code=500, detail=f"Could not read uploaded file: {e}")
-
-            try:
-                with open(path, "wb") as out:
-                    out.write(contents)
-            except Exception as e:
-                print(f"Error writing uploaded file to disk: {e}")
-                traceback.print_exc()
-                raise HTTPException(status_code=500, detail=f"Could not save uploaded file: {e}")
-
-            self.csv_path = path
-            try:
-                # Attempt to read the CSV into a DataFrame
-                # keep_default_na=False and na_filter=False might affect how empty strings vs NaNs are handled.
-                # Adjust as per your data's nature.
-                header_arg = 0 if has_header else None
-                print(header_arg, "header")
-                df_orig = pd.read_csv(
-                    self.csv_path,header=header_arg, keep_default_na=True, na_filter=True # Adjusted for more standard NaN handling
-                )
-            except pd.errors.EmptyDataError:
-                print(f"CSV parsing failed: The file at {self.csv_path} is empty or contains no data.")
-                raise HTTPException(status_code=400, detail="CSV file is empty or contains no data.")
-            except Exception as exc:
-                print(f"CSV parsing failed: {exc}")
-                traceback.print_exc()
-                raise HTTPException(status_code=400, detail=f"CSV parsing failed: {exc}")
-
-        elif json_rows is not None:
-            if not isinstance(json_rows, list) or not all(isinstance(row, dict) for row in json_rows):
-                raise HTTPException(status_code=400, detail="JSON input must be a list of objects.")
-            if not json_rows:
-                 raise HTTPException(status_code=400, detail="JSON input is an empty list.")
-            df_orig = pd.DataFrame(json_rows)
-            os.makedirs("uploads", exist_ok=True) # Ensure uploads directory exists for JSON case too
-            fname = f"{uuid.uuid4().hex}_from_json.csv"
-            path = os.path.join("uploads", fname)
-            try:
-                df_orig.to_csv(path, index=False)
-            except Exception as e:
-                print(f"Error saving DataFrame from JSON to CSV: {e}")
-                traceback.print_exc()
-                raise HTTPException(status_code=500, detail=f"Could not process JSON data into CSV: {e}")
-            self.csv_path = path # Set csv_path for consistency if needed later
-        else:
-            raise HTTPException(status_code=400, detail="No data provided. Please upload a CSV file or provide JSON rows.")
-
-        if df_orig is None or df_orig.empty: # Check if DataFrame is empty after loading
-             # This might be redundant if pd.read_csv raises EmptyDataError, but good as a fallback.
-             print("DataFrame is empty after loading.")
-             raise HTTPException(status_code=400, detail="Loaded DataFrame is empty.")
-
-        # --- The rest of your pipeline remains the same ---
-        print("\nStarting initial classification and cleanup workflow...")
-        # Ensure your constants like IMG_PATH_DEFAULT, HEAD_ROWS_DEFAULT, OPENAI_MODEL_DEFAULT, MAX_ATTEMPTS_DEFAULT are defined
-        # and functions like fake_preview_df, main_analysis_and_cleanup_pipeline are correctly imported and working.
-
-        # Example placeholder for fake_preview_df if it's just taking a head:
-
-
-        classification_code, raw_classification_json, generated_cleanup_code, split_params = await main_analysis_and_cleanup_pipeline(
-            df=fake_preview_df(df_orig.copy(), HEAD_ROWS_DEFAULT), # Assuming HEAD_ROWS_DEFAULT is defined
-            img_path=IMG_PATH_DEFAULT,       # Assuming IMG_PATH_DEFAULT is defined
-            head_rows=HEAD_ROWS_DEFAULT,     # Assuming HEAD_ROWS_DEFAULT is defined
-            model=OPENAI_MODEL_DEFAULT,      # Assuming OPENAI_MODEL_DEFAULT is defined
-            max_attempts_classification=MAX_ATTEMPTS_DEFAULT, # Assuming MAX_ATTEMPTS_DEFAULT is defined
-            max_llm_iterations_cleanup=MAX_ATTEMPTS_DEFAULT   # Assuming MAX_ATTEMPTS_DEFAULT is defined
-        )
-        
-        final_classification_code = classification_code
-        final_llm_summary_json = raw_classification_json
-        final_generated_code_to_apply = generated_cleanup_code
-
-        if final_classification_code == "PIVOT":
-            print("\nInitial classification is PIVOT. Performing pivot cleanup...")
-            if not self.csv_path:
-                 raise HTTPException(status_code=500, detail="CSV path not available for pivot cleanup.")
-
-            cleaned_df_after_pivot = restructure_pivoted_csv_v3(self.csv_path) # Assuming this function is defined
-            if cleaned_df_after_pivot is None or cleaned_df_after_pivot.empty:
-                print("Pivot cleanup function returned None or empty. Assuming cleanup failed or was not applicable.")
-            else:
-                print("Pivot cleanup successful. Updating DataFrame and CSV path.")
-                df_orig = cleaned_df_after_pivot
-                
-                base, ext = os.path.splitext(self.csv_path)
-                cleaned_path = f"{base}_pivoted_restructured{ext}"
-                df_orig.to_csv(cleaned_path, index=False)
-                self.csv_path = cleaned_path
-                print(f"Pivoted restructured data saved to: {self.csv_path}")
-
-                print("Re-classifying the unpivoted data...")
-                classification_code_after_pivot, raw_json_after_pivot, generated_code_after_pivot, _ = await main_analysis_and_cleanup_pipeline(
-                    df=fake_preview_df(df_orig.copy(), HEAD_ROWS_DEFAULT),
-                    img_path=IMG_PATH_DEFAULT,
-                    head_rows=HEAD_ROWS_DEFAULT,
-                    model=OPENAI_MODEL_DEFAULT,
-                    max_attempts_classification=MAX_ATTEMPTS_DEFAULT,
-                    max_llm_iterations_cleanup=MAX_ATTEMPTS_DEFAULT
-                )
-                final_classification_code = classification_code_after_pivot
-                final_llm_summary_json = raw_json_after_pivot
-                final_generated_code_to_apply = generated_code_after_pivot
-        
-        elif final_classification_code == "MULTI_VALUE_CELLS_SPLIT" and split_params:
-            print("\nInitial classification is MULTI_VALUE_CELLS_SPLIT. Performing split cleanup...")
-            if not self.csv_path:
-                raise HTTPException(status_code=500, detail="CSV path not available for split cleanup.")
-
-            type_mapping = {'float': float, 'int': int, 'str': str}
-            parsed_data_types = {}
-            if split_params.get('data_types'):
-                for col, type_str in split_params['data_types'].items():
-                    if type_str in type_mapping:
-                        parsed_data_types[col] = type_mapping[type_str]
-                    else:
-                        print(f"Warning: Unknown data type '{type_str}' for column '{col}'. Defaulting to string.")
-                        parsed_data_types[col] = str
-
-            cleaned_df_after_split = generalize_csv_restructure( # Assuming this function is defined
-                file_path_or_buffer=self.csv_path,
-                id_cols=split_params['id_cols'],
-                value_cols_to_explode=split_params['value_cols_to_explode'],
-                delimiter=split_params['delimiter'],
-                data_types=parsed_data_types
-            )
-
-            if cleaned_df_after_split is None or cleaned_df_after_split.empty:
-                print("Split cleanup function returned None or empty DataFrame. Assuming cleanup failed or was not applicable.")
-            else:
-                print("Split cleanup successful. Updating DataFrame and CSV path.")
-                df_orig = cleaned_df_after_split
-                
-                base, ext = os.path.splitext(self.csv_path)
-                cleaned_path = f"{base}_split_restructured{ext}"
-                df_orig.to_csv(cleaned_path, index=False)
-                self.csv_path = cleaned_path
-                print(f"Split restructured data saved to: {self.csv_path}")
-
-                print("Re-classifying the split data...")
-                classification_code_after_split, raw_json_after_split, generated_code_after_split, _ = await main_analysis_and_cleanup_pipeline(
-                    df=fake_preview_df(df_orig.copy(), HEAD_ROWS_DEFAULT),
-                    img_path=IMG_PATH_DEFAULT,
-                    head_rows=HEAD_ROWS_DEFAULT,
-                    model=OPENAI_MODEL_DEFAULT,
-                    max_attempts_classification=MAX_ATTEMPTS_DEFAULT,
-                    max_llm_iterations_cleanup=MAX_ATTEMPTS_DEFAULT
-                )
-                final_classification_code = classification_code_after_split
-                final_llm_summary_json = raw_json_after_split
-                final_generated_code_to_apply = generated_code_after_split
-        
-        cleanup_applied_successfully = False
-        if final_generated_code_to_apply:
-            print(f"\nApplying final generated cleanup code to the dataset (current classification: {final_classification_code})...")
-            try:
-                exec_globals = {'pd': pd, 'df': df_orig.copy()} # Operate on a copy for safety during exec
-                # Ensure run_in_threadpool is defined or remove if exec is not significantly blocking
-                await run_in_threadpool(exec, final_generated_code_to_apply, exec_globals) # Assuming run_in_threadpool is defined
-                df_orig = exec_globals['df']
-                print("cleaned_df",df_orig.head(5))
-                print("Successfully applied final generated cleanup code to df_orig.")
-                cleanup_applied_successfully = True
-            except Exception as e:
-                print(f"🚨 Error applying final generated cleanup code to df_orig: {e}")
-                traceback.print_exc()
-                # Decide how to handle df_orig if exec fails; it might be partially modified.
-                # For now, we proceed with potentially modified df_orig.
-        
-        self.dataset = df_orig.to_dict(orient="records")
-        print(f"\nFinal self.dataset updated with {len(self.dataset)} records.")
-
-        self.profile_original = self._build_profile(df_orig)
-        
-        # Assuming CleanupPlanRequest and DataProfile are defined and can be instantiated
-        plan_payload = CleanupPlanRequest(
-            data_profile=DataProfile(**self.profile_original), 
-            drop_null_threshold=drop_null_threshold,
-        )
-        cleanup_plan_result = self.cleanup_plan(plan_payload)
-
-        if hasattr(self, 'synthetic_dataset'):
-            self.synthetic_dataset = None
-        if hasattr(self, 'profile_synthetic'):
-            self.profile_synthetic = None
-        screenshot_b64 = None
-        if os.path.exists(IMG_PATH_DEFAULT):
-            with open(IMG_PATH_DEFAULT, "rb") as img_f:
-                screenshot_b64 = base64.b64encode(img_f.read()).decode("utf-8")
-
-        return {
-            "message": "Data uploaded, processed, and profiled.",
-            "classification_final": final_classification_code or "NONE",
-            "llm_summary_json_final": final_llm_summary_json,
-            "cleanup_code_generated_and_applied": cleanup_applied_successfully,
-            "row_count": len(df_orig),
-            "column_count": len(df_orig.columns),
-            "profile": self.profile_original,
-            "cleanup_plan": cleanup_plan_result["plan"],
-            "table_screenshot_b64": screenshot_b64,        # 👈 NEW FIELD
-        }
-
-    # --------------------  CLEANUP + synth in one step ------------- #
-    def apply_cleanup_then_synthesize(
-        self,
-        actions: List[CleanupAction],
-    ) -> Dict[str, Any]:
-        """
-        1. Execute user-approved cleanup actions on self.dataset
-        2. Build synthetic data + synthetic profile
-        3. Return both cleaned original and synthetic metadata
-        """
-
-        exec_payload = CleanupExecuteRequest(actions=actions)
-        cleanup_result = self.cleanup_execute(exec_payload)
-
-        # (cleanup_execute already updates self.dataset)
-        # synth_meta = self.generate_synthetic_data()
-        synth_meta = SimpleTabularSynth(
-            seed=42
-            ).fit(self.dataset)
-
-        return {
-            "message": "Cleanup executed, synthetic data generated & profiled.",
-            "cleanup": cleanup_result,
-            "synthetic": synth_meta,
-        }
-# ------------------------------------------------------------------ #
-#  2️⃣  SYNTHETIC‑DATA METHOD                                         #
-# ------------------------------------------------------------------ #
-    def generate_synthetic_data(self) -> Dict[str, Any]:
-        """generate synthetic data for the full dataset for llm based analysis"""
-        df_real = self._get_df(None)
-        synth = SimpleTabularSynth(
-                seed=42
-                ).fit(df_real)
-        df_synth = synth.sample(len(df_real))
-
-            #     # ---- cache + profile ------------------------------------------ #
-        self.synthetic_dataset = df_synth.to_dict(orient="records")
-        self.profile_synthetic = self._build_profile(df_synth)
-
-        preview = json.loads(
-                        df_synth.head().to_json(orient="records", date_format="iso")
-                    )
-        return {
-            "message": "Synthetic data generated and profiled.",
-            "row_count": int(len(df_synth)),        # make sure these are plain ints
-            "column_count": int(df_synth.shape[1]),
-            "preview": preview,
-        }
-    
     def process_anonymized_data(self, data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Receives client-generated anonymized data, loads it into a DataFrame,
@@ -421,238 +138,12 @@ class DataAnalysisService:
         # --- Replicate original logic on the new data ---
         # Cache the received dataset and profile it
         self.synthetic_dataset = df_anonymized.to_dict(orient="records")
-        self.profile_synthetic = self._build_profile(df_anonymized) # Assumes _build_profile exists
 
         # Return a success response
         return {
             "message": f"Successfully received and processed {len(df_anonymized)} rows of anonymized data."
         }
-     
-    def profile_data(self) -> Dict[str, Any]:
-        """Method to profile dataset"""
 
-        df = self._get_df(None)
-        profile = Profiler(df.to_dict(orient="records"))
-        report = profile.report(report_options={"output_format": "compact"})
-
-        # 🔑  new line – deep sanitise NumPy NaN/Inf
-        report_clean = _sanitize_nan(report)
-
-        return report_clean
-   
-    def _build_profile(self, df: pd.DataFrame) -> Dict[str, Any]:
-
-        prof = Profiler(df.to_dict(orient="records"))
-        report = prof.report(report_options={"output_format": "compact"})
-        return _sanitize_nan(report)
-    # --------------------  CLEANUP (plan)  ---------------------- #
-    def cleanup_plan(self, payload: CleanupPlanRequest) -> Dict[str, Any]:
-        """
-        Build a smart cleanup plan.
-        """
-        df = self._get_df(payload.data)
-        row_count = payload.data_profile.global_stats.row_count
-        drop_threshold = payload.drop_null_threshold
-        plan: List[Dict[str, Any]] = []
-
-        # ---------- helper: full filler choice --------------------------- #
-        filler_opts = [
-            "fill_with_mean",
-            "fill_with_median",
-            "fill_with_mode",
-            "fill_with_value",
-            "interpolate_linear",
-            "interpolate_ffill",
-            "interpolate_bfill",
-        ]
-        struct_opts = ["split_and_explode", "melt_wide_to_long", "promote_first_row_header"]
-
-        # ---------- 1. column-level analysis ----------------------------- #
-        delimiters = r"[|,;/]"      # quick pattern for multi-value cells
-
-        for col_stat in payload.data_profile.data_stats:
-            col = col_stat.column_name
-            if col not in df.columns:
-                continue
-
-            stats = col_stat.statistics
-            null_cnt = stats.get("null_count", 0)
-            null_ratio = null_cnt / row_count if row_count else 0.0
-            unique_ratio = stats.get("unique_ratio") or 0.0
-            data_type = (col_stat.data_type or "").lower()
-            # sample_str = col_stat.samples or ""
-            raw_sample = stats.get("samples", stats.get("sample_values", ""))
-            if isinstance(raw_sample, list):
-               sample_str = str(raw_sample[0]) if raw_sample else ""
-            else:
-               sample_str = str(raw_sample)
-
-            # --------- detect multi-value strings ------------------------ #
-            has_delim = bool(re.search(delimiters, sample_str))
-            if has_delim and data_type == "string":
-                action = "split_and_explode"
-                reason = "Values look concatenated (e.g. 'A | B | C')"
-            # --------- high nulls → drop -------------------------------- #
-            elif null_ratio > drop_threshold:
-                action, reason = "drop", f"Null ratio {null_ratio:.1%} > {drop_threshold:.0%}"
-            # --------- some nulls → fill -------------------------------- #
-            elif null_ratio > 0:
-                action = "fill_with_mean" if data_type in ("int", "float") else "fill_with_mode"
-                reason = f"{null_cnt} missing values"
-            # --------- default ignore ----------------------------------- #
-            else:
-                action, reason = "ignore", "No immediate issue detected"
-
-            other = list(dict.fromkeys(      # keep order / de-dup
-                (struct_opts + filler_opts + ["drop", "ignore"]))
-            )
-            if action in other:
-                other.remove(action)
-
-            plan.append(
-                {
-                    "column_name": col,
-                    "null_ratio": round(null_ratio, 4),
-                    "unique_ratio": round(unique_ratio, 4),
-                    "data_type": data_type,
-                    "suggested_action": action,
-                    "reason": reason,
-                    "other_options": other,
-                }
-            )
-
-        # ---------- 2. table-level heuristics --------------------------- #
-        wide_numeric_cols = [
-            c for c in df.columns
-            if pd.api.types.is_numeric_dtype(df[c]) and df[c].isna().sum() > 0
-        ]
-        if len(wide_numeric_cols) >= 3:
-            plan.append(
-                {
-                    "column_name": "<table>",
-                    "suggested_action": "melt_wide_to_long",
-                    "reason": f"Data looks like a pivot table with {len(wide_numeric_cols)} value columns",
-                    "other_options": ["ignore", "drop"] + struct_opts,
-                }
-            )
-
-        if any(col.startswith(("Unnamed", "Column")) for col in df.columns) or df.columns.duplicated().any():
-            plan.append(
-                {
-                    "column_name": "<table>",
-                    "suggested_action": "promote_first_row_header",
-                    "reason": "Column names appear generic or duplicated",
-                    "other_options": ["ignore"] + struct_opts,
-                }
-            )
-
-        return {"plan": plan, "message": "Enhanced cleanup suggestions generated."}
-
-    # --------------------  CLEANUP (execute) -------------------- #
-    def cleanup_execute(self, payload: CleanupExecuteRequest) -> Dict[str, Any]:
-        df = self._get_df(payload.data).copy()
-        applied: List[Dict[str, Any]] = []
-
-        for item in payload.actions:
-            col = item.column_name          # may be "" for whole-table actions
-            action = item.action
-            extra  = item.fill_value        # overloaded for parameters
-
-            try:
-                # ===================================================== DROP
-                if action == "drop":
-                    if col in df.columns:
-                        df.drop(columns=[col], inplace=True)
-                    else:
-                        raise KeyError("Column not found")
-                    msg = "Column dropped"
-
-                # =========================================== CONVERT TO DATE
-                elif action == "convert_to_date":
-                    df[col] = pd.to_datetime(df[col], errors="coerce")
-                    msg = "Converted to datetime"
-
-                # =============================================== FILLERS
-                # … (unchanged code for fill_with_* and interpolate_*) …
-
-                # ================================================= SPLIT +
-                elif action == "split_and_explode":
-                    delimiter = extra or "|"        # default delimiter
-                    if col not in df.columns:
-                        raise KeyError("Column not found")
-                    df[col] = (
-                        df[col]
-                        .astype(str)
-                        .str.split(delimiter)
-                        .apply(lambda lst: [s.strip() for s in lst])
-                    )
-                    df = df.explode(col).reset_index(drop=True)
-                    msg = f"Split on '{delimiter}' and exploded to rows"
-
-                # ================================================== MELT ==
-                elif action == "melt_wide_to_long":
-                    # extra can carry {"value_vars": [...], "var_name": "...", "value_name":"..."}
-                    params = extra or {}
-                    id_vars   = params.get("id_vars")   or [c for c in df.columns if c not in params.get("value_vars", [])]
-                    value_vars = params.get("value_vars") or [c for c in df.columns if c not in id_vars]
-                    var_name  = params.get("var_name", "variable")
-                    value_name = params.get("value_name", "value")
-
-                    df = df.melt(id_vars=id_vars, value_vars=value_vars,
-                                var_name=var_name, value_name=value_name)
-                    df.dropna(subset=[value_name], inplace=True)
-                    df.reset_index(drop=True, inplace=True)
-                    msg = f"Melted {len(value_vars)} columns to long format"
-
-                # ====================================== PROMOTE HEADER ====
-                elif action == "promote_first_row_header":
-                    df.columns = df.iloc[0].astype(str).str.strip()
-                    df = df.iloc[1:].reset_index(drop=True)
-                    msg = "First row promoted to header"
-
-                # ================================================= IGNORE
-                elif action == "ignore":
-                    msg = "No change made"
-
-                # ========================================== UNKNOWN
-                else:
-                    raise ValueError(f"No handler for '{action}'")
-
-                applied.append(
-                    {"column_name": col or "<table>", "action": action, "status": "success", "message": msg}
-                )
-
-            except Exception as exc:
-                applied.append(
-                    {"column_name": col or "<table>", "action": action, "status": "failed", "message": str(exc)}
-                )
-
-        # persist & return
-        self.dataset = df.to_dict(orient="records")
-        return {
-            "cleaned_data": self.dataset,
-            "applied_actions": applied,
-            "message": "Cleanup executed.",
-        }
-    
-    def get_original_data(self) -> List[Dict[str, Any]]:
-        if self.dataset is None:
-            raise HTTPException(status_code=404, detail="No dataset uploaded")
-        return self.dataset
-
-    def get_synthetic_data(self) -> List[Dict[str, Any]]:
-        if self.synthetic_dataset is None:
-            raise HTTPException(status_code=404, detail="No synthetic data available")
-        return self.synthetic_dataset
-
-    def get_profiles(self) -> Dict[str, Any]:
-        if self.profile_original is None:
-            raise HTTPException(status_code=404, detail="No profile available")
-        return {
-            "original_profile": self.profile_original,
-            "synthetic_profile": self.profile_synthetic,
-        }
-    # --------------------  EXECUTE ARBITRARY CODE -------------------- #
     async def execute_code(self, payload: ExecuteCodeWithDataPayload) -> Dict[str, Any]:
         df = self._get_df(payload.data)
         if not payload.code:
@@ -675,7 +166,7 @@ class DataAnalysisService:
             return {"result": f"Error executing code: {exc}\n{traceback.format_exc()}"}
 
 
-    def summarize(self, payload: SummarizePayload) -> Dict[str, Any]:
+    def summarize(self, payload: SummarizePayload, model: str, api_key: str) -> Dict[str, Any]:
             raw_output = (
                 payload.execution_result.strip()
                 if isinstance(payload.execution_result, str)
@@ -714,10 +205,23 @@ class DataAnalysisService:
     """,
             }
 
-            resp = self.client.chat.completions.create(model="gpt-4o", messages=[system_msg, user_msg], temperature=0)
-            ai_text = resp.choices[0].message.content
+            messages = [system_msg, user_msg]
+
+            # --- CHANGE: Use the provider system ---
+            provider = self._get_provider_for_model(model)
+            try:
+                ai_text = provider.chat_completion(
+                    model=model,
+                    messages=messages,
+                    temperature=0,
+                    api_key=api_key
+                )
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"LLM provider error during summary: {e}")
+
             if ai_text is None:
-                raise HTTPException(status_code=500, detail="OpenAI returned no content.")
+                raise HTTPException(status_code=500, detail="LLM provider returned no content.")
+    
             ai_text = ai_text.strip().lstrip("```json").rstrip("```").strip()
 
 
@@ -727,7 +231,7 @@ class DataAnalysisService:
                 raise HTTPException(status_code=500, detail=f"OpenAI returned invalid JSON:\n{ai_text}")
 
     # --------------------  GPT‑DRIVEN ANALYSIS (Code Generation) -------------------- #
-    def analyze(self, req: DataFrameRequest) -> Dict[str, Any]:
+    def analyze(self, req: DataFrameRequest, api_key: str) -> Dict[str, Any]:
         """
         Prompts an LLM to generate Python code for data analysis based on user's question.
         The generated code should output analysis_data, chart_data (for ECharts),
@@ -767,6 +271,9 @@ class DataAnalysisService:
 
         prompt = f"""
 You are a data analysis assistant. Your task is to generate Python code to analyze a pandas DataFrame named 'df'.
+
+**CRITICAL RULE: DO NOT, under any circumstances, write any code to read a file (e.g., `pd.read_csv(...)` or `pd.read_json(...)`). The DataFrame `df` is pre-defined and ready to use. Any code that tries to open or read a file will fail.**
+
 The DataFrame 'df' has {num_rows} rows and {num_cols} columns.
 Column names in df: {cols}
 
@@ -823,16 +330,44 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
 """
         sys_msg = {"role": "system", "content": "Respond with raw JSON containing only key 'code'."}
         user_msg = {"role": "user", "content": prompt}
-
-        resp = self.client.chat.completions.create(model="gpt-4o", messages=[sys_msg, user_msg], temperature=0)
-        txt = resp.choices[0].message.content
-        if txt is None:
-            return {"openai_result": {"code": None, "error": "OpenAI returned no content."}}
-        txt = txt.strip().lstrip("```json").rstrip("```").strip()
+        messages = [sys_msg, user_msg]
+        
+        # --- CHANGE: Use the provider system ---
+        provider = self._get_provider_for_model(req.model)
         try:
-            return {"openai_result": json.loads(txt)}
+            print(f"analyze: Calling provider for model '{req.model}'...")
+            txt = provider.chat_completion(
+                model=req.model,
+                messages=messages,
+                temperature=0,
+                api_key=api_key
+            )
+            # This is the log you added, which is great for debugging
+            print(f"analyze: Received content from provider:\n{txt}")
+            
+        except Exception as e:
+            print(f"!!! analyze: LLM provider raised an exception: {e}")
+            # ALWAYS return a dictionary on failure
+            return {"openai_result": {"code": None, "error": f"LLM provider error: {e}"}}
+
+        # --- 3. Handle empty response from provider ---
+        if not txt:
+            print("!!! analyze: Provider returned an empty or None response.")
+            return {"openai_result": {"code": None, "error": "LLM provider returned no content."}}
+        
+        # --- 4. Clean and parse the response ---
+        # This handles the "```json" fences correctly
+        cleaned_txt = txt.strip().lstrip("```json").rstrip("```").strip()
+        
+        try:
+            result = {"openai_result": json.loads(cleaned_txt)}
+            print("analyze: JSON parsing successful. Returning result.")
+            # ALWAYS return a dictionary on success
+            return result
         except json.JSONDecodeError:
-            return {"openai_result": {"code": None, "error": f"Invalid JSON from OpenAI: {txt}"}}
+            print(f"!!! analyze: JSONDecodeError. The LLM returned invalid JSON: {cleaned_txt}")
+            # ALWAYS return a dictionary on failure
+            return {"openai_result": {"code": None, "error": f"Invalid JSON format from LLM provider."}}        
 
     # --------------------  CODE CORRECTION -------------------- #
     def correct_code(
@@ -843,6 +378,8 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
         row_count: int,
         col_count: int,
         user_question: str,
+        model: str,      # <-- Add model
+        api_key: str     # <-- Add api_key
     ) -> Dict[str, Any]:
         cols = ", ".join(df_head.columns)
         sys_msg = {
@@ -898,10 +435,24 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
         """,
         }
 
-        resp = self.client.chat.completions.create(model="gpt-4o", messages=[sys_msg, user_msg], temperature=0)
-        txt = resp.choices[0].message.content
+        messages = [sys_msg, user_msg]
+
+        # --- CHANGE: Use the provider system ---
+        provider = self._get_provider_for_model(model)
+        try:
+            txt = provider.chat_completion(
+                model=model,
+                messages=messages,
+                temperature=0,
+                api_key=api_key
+            )
+        except Exception as e:
+            # Return a dict, don't raise HTTPException from this helper
+            return {"openai_result": {"code": None, "error": f"LLM provider error during code correction: {e}"}}
+
         if txt is None:
-            return {"openai_result": {"code": None, "error": "OpenAI returned no content during code correction."}}
+            return {"openai_result": {"code": None, "error": "LLM provider returned no content during code correction."}}
+        
         txt = txt.strip().lstrip("```json").rstrip("```").strip()
         try:
             return {"openai_result": json.loads(txt)}
@@ -909,7 +460,7 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
             return {"openai_result": {"code": None, "error": f"Invalid JSON from OpenAI during code correction: {txt}"}}
 
     # --------------------  FULL ANALYSIS (on Synthetic Data) -------------------- #
-    async def full_analysis(self, req: DataFrameRequest) -> Dict[str, Any]:
+    async def full_analysis(self, req: DataFrameRequest,api_key: str) -> Dict[str, Any]:
             """
             Performs LLM-driven analysis on self.synthetic_dataset, then (optionally)
             executes LLM-suggested enhanced code. Always returns a summary that matches
@@ -936,9 +487,10 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
                 data=self.synthetic_dataset,
                 # We don't need to pass the ID down, just the retrieved history
                 chat_history=chat_history,
+                model=req.model 
             )
 
-            analysis_resp = self.analyze(synthetic_req)
+            analysis_resp = self.analyze(synthetic_req, api_key=api_key)
             code = analysis_resp["openai_result"].get("code")
             if not code:
                 detail = analysis_resp["openai_result"].get(
@@ -978,6 +530,8 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
                             row_count=rows_syn,
                             col_count=cols_syn,
                             user_question=question,
+                            model=req.model, # Pass model
+                            api_key=api_key  # Pass api_key
                         )
                         corrected_code = corr["openai_result"].get("code")
                         if not corrected_code:
@@ -998,7 +552,9 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
                     execution_result=exec_res_initial,
                     code=code,
                     question=current_q,
-                )
+                ),
+                model=req.model,
+                api_key=api_key
             )
 
             final_json_output   = (
@@ -1026,7 +582,9 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
                             execution_result=exec_res_enhanced,
                             code=enhanced_code,
                             question=current_q,
-                        )
+                        ),
+                        model=req.model,
+                        api_key=api_key
                     )
                     final_json_output = (
                         json.loads(exec_res_enhanced)
@@ -1062,105 +620,4 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
                 "conversation_id":       conversation_id,
             }
 
-
-
-    # --------------------  LLM‑FREE ANALYSIS (on Original Data) -------------------- #
-    async def llm_free_analysis(self, req: LLMFreeAnalysisRequest) -> Dict[str, Any]:
-            """
-            Executes provided code against a dataset.
-            The executed code is expected to print a JSON object containing 'parameterized_answer',
-            'chart_data', and 'analysis_data'. This method structures that output.
-            """
-            data_for_execution: Optional[List[Dict[str, Any]]] = None
-            if req.data is not None:
-                print("LLM-Free Analysis: Using data provided in the request.")
-                data_for_execution = req.data
-            elif self.dataset is not None:
-                print("LLM-Free Analysis: Using self.dataset (original data).")
-                data_for_execution = self.dataset
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Original dataset not available and no data provided in request for llm_free_analysis."
-                )
-
-            exec_resp = await self.execute_code(
-                ExecuteCodeWithDataPayload(code=req.code, data=data_for_execution)
-            )
-            result = exec_resp["result"]
-
-            if isinstance(result, str) and result.startswith("Error executing code:"):
-                raise HTTPException(status_code=400, detail=f"Error executing provided code in llm_free_analysis: {result}")
-
-            try:
-                parsed_result = json.loads(result) if isinstance(result, str) else result
-                if not isinstance(parsed_result, dict):
-                    raise HTTPException(status_code=500, detail=f"LLM-free execution result is not a valid JSON object: {parsed_result}")
-            except json.JSONDecodeError:
-                raise HTTPException(status_code=500, detail=f"LLM-free execution result is not valid JSON: {result}")
-
-            return {
-                # Use the 'parameterized_answer' from the code output as the primary summary.
-                "summary": parsed_result.get("parameterized_answer") or parsed_result.get("parameterized_summary") or parsed_result.get("summary"),
-                "chart_data": parsed_result.get("chart_data"),
-                # Directly get the 'analysis_data' object.
-                "analysis_data": parsed_result.get("analysis_data"),
-                "code": req.code, # The code that was executed
-            }
-
-    async def execute_code(self, payload: ExecuteCodeWithDataPayload) -> Dict[str, Any]:
-        """
-        Placeholder for the actual code execution logic.
-        This would typically involve a sandboxed environment.
-        For this example, it simulates execution and expects the Python code
-        to print a JSON string to stdout.
-        The 'df' variable should be available in the scope of the executed code.
-        """
-        # This is a mock execution. In a real scenario, you'd use a secure execution environment.
-        # e.g., using restricted_exec, a Docker container, or a dedicated microservice.
-        
-        # For testing, let's try to actually execute it if pandas is available
-        # This is highly simplified and UNSAFE for untrusted code.
-        # A proper implementation requires a secure sandbox.
-
-        if payload.data is None:
-             # Fallback to self.dataset if payload.data is not provided, common for llm_free_analysis.
-             # For full_analysis, data should always be explicitly provided (synthetic_dataset).
-            if self.dataset is not None and not payload.data: # Check if service has original data
-                 df = pd.DataFrame(self.dataset)
-            else: # No data provided and no default original data. Code might not expect df or might fail.
-                 df = pd.DataFrame() # Or raise error if df is always expected
-                 # print("Warning: execute_code called with no data and no self.dataset available.")
-        else:
-            df = pd.DataFrame(payload.data)
-
-        # Create a string buffer to capture stdout
-        import sys
-        from io import StringIO
-
-        old_stdout = sys.stdout
-        sys.stdout = captured_output = StringIO()
-
-        global_vars = {'pd': pd, 'df': df, 'json': json} # Make pandas, df, and json available
-
-        try:
-            exec(payload.code, global_vars)
-            output = captured_output.getvalue()
-            # Try to parse it as JSON, assuming the code prints JSON
-            try:
-                # If code prints multiple things, only the last JSON is usually desired,
-                # or the code must be structured to print only one JSON.
-                # This simplistic approach takes the whole output.
-                parsed_output = json.loads(output)
-                return {"result": parsed_output}
-            except json.JSONDecodeError:
-                 # If not JSON, return the raw string output (might be an error or just text)
-                if not output and payload.code: # Code ran but printed nothing
-                    return {"result": "Error executing code: Code executed but produced no JSON output."}
-                return {"result": output if output else "Error executing code: Code executed but produced no output."}
-
-        except Exception as e:
-            return {"result": f"Error executing code: {type(e).__name__}: {str(e)}"}
-        finally:
-            sys.stdout = old_stdout # Restore stdo
 

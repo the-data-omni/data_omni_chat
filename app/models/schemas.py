@@ -12,6 +12,7 @@ class DataFrameRequest(BaseModel):
     question: str
     conversation_id: Optional[str] = None # Frontend sends this back
     chat_history: Optional[List[ChatTurn]] = []
+    model: str = "gpt-4o"
 
 class ExecuteCodeWithDataPayload(BaseModel):
     """

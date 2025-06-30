@@ -1,1 +1,0 @@
-const s={"public.transactions":{x:192,y:176},"public.vendors":{x:-64,y:240}};export{s as default};

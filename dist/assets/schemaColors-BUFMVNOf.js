@@ -1,1 +1,0 @@
-const s="#91C4F2",o="#AFA2FF",c="#75C9C8",t="#FFD791",F="#FFD791",e={DEFAULT:s,public:"#BEB8EB",adjust:o,helpers:c,sales_force:t,mobile_analytics:F};export{s as DEFAULT,o as adjust,e as default,c as helpers,F as mobile_analytics,t as sales_force};

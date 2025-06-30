@@ -1,1 +1,0 @@
-import{cq as t,r as a,p as o,aZ as s}from"./index-C5-7V04H.js";function l(){const{loginWithRedirect:e}=t();return a.useEffect(()=>{e({appState:{next:o.dashboard.overview},openUrl(r){globalThis.location.replace(r)}}).catch(s.error)},[e]),null}export{l as Page};
