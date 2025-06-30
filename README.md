@@ -13,12 +13,14 @@ Welcome to Data Omni Chat! This application, built with FastAPI, allows you to e
 
 To get the application running on your local machine, please follow these steps.
 
+```bash
+
 ### 1. Clone the Repository
 
 First, clone the repository to your local machine using the following command:
 
-```bash
-git clone <your-repository-url>
+
+git clone https://github.com/the-data-omni/data_omni_chat
 cd data_omni_chat
 
 2. Create and Activate a Virtual Environment
@@ -38,9 +40,15 @@ Install all the required Python packages from the requirements.txt file:
 
 pip install -r requirements.txt
 
+
+```
+
+
 ▶️ How to Run the Application
 Once you have completed the installation steps, you can run the application with a single command.
 
+
+```bash
 1. Start the FastAPI Server
 From the root directory of the project, run the following command:
 
@@ -52,3 +60,9 @@ After the server starts, open your favorite web browser and navigate to the foll
 http://127.0.0.1:8000/chat
 
 You should now see the chat interface, where you can upload your CSV file and begin your conversation!
+
+
+```
+
+You will need an OpenAI or Gemini API key to chat with your data
+
