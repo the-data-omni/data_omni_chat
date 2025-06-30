@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 from app.services.llm_providers import (AnthropicProvider, GoogleProvider,
                                         LLMProvider, OpenAIProvider)
-from dotenv import load_dotenv
+
 from fastapi import HTTPException
 
 MAX_ATTEMPTS_DEFAULT = 5
@@ -56,7 +56,6 @@ class DataAnalysisService:
     """
 
     def __init__(self) -> None:
-        load_dotenv()
         self.dataset: Optional[List[Dict[str, Any]]] = None  # persistent store
         self.synthetic_dataset: Optional[List[Dict[str, Any]]] = None 
         self.profile_original: Optional[Dict[str, Any]] = None
