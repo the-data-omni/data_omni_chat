@@ -2,6 +2,8 @@
 
 Welcome to Data Omni Chat! This application, built with FastAPI, allows you to engage in private conversations with your CSV files using the power of Large Language Models (LLMs).Leverage powerfull large language models without them seeing your data. Upload your data and start asking questions to gain insights quickly and intuitively. Generate Powerpoint slides from your conversatio to quickly shar ein presentations
 
+[![Watch the video](https://img.youtube.com/vi/Dpa3oYEAJw4/maxresdefault.jpg)](https://youtu.be/Dpa3oYEAJw4)
+
 ## Features
 
 * **Interactive Chat Interface:** A user-friendly chat interface to interact with your data.
