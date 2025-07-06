@@ -9,6 +9,61 @@ Welcome to Data Omni Chat! This application, built with FastAPI, allows you to e
 * **Support for CSV Files:** Directly upload and start chatting with your CSV data.
 * **Powerpoint Generation:** Generate Powerpoint slides from your conversation.
 
+
+Project Structure
+The repository is organized into a backend (app) and a frontend (frontend) directory. The compiled frontend code is served from the root dist folder.
+
+/data_omni_chat
+├── app/                  # FastAPI application, routers, logic
+├── dist/                 # Compiled React code (auto-generated)
+├── frontend/             # React source code (where you edit)
+│   ├── src/
+│   ├── vite.config.ts
+│   └── package.json
+├── main.py               # Main FastAPI server entrypoint
+├── requirements.txt      # Python dependencies
+└── README.md
+
+Of course. Here is a complete README.md file tailored to your project. You can copy and paste this directly into a README.md file at the root of your data_omni_chat repository.
+
+FastAPI and React Chat Application
+This project is a web-based chat application built with a FastAPI backend and a React frontend. The FastAPI server is responsible for both handling the API logic and serving the static files for the compiled React application.
+
+Table of Contents
+Project Structure
+
+Prerequisites
+
+Installation
+
+How to Run the Application
+
+Development Workflow (Editing the Frontend)
+
+Deployment
+
+Project Structure
+The repository is organized into a backend (app) and a frontend (frontend) directory. The compiled frontend code is served from the root dist folder.
+
+/data_omni_chat
+├── app/                  # FastAPI application, routers, logic
+├── dist/                 # Compiled React code (auto-generated)
+├── frontend/             # React source code (where you edit)
+│   ├── src/
+│   ├── vite.config.ts
+│   └── package.json
+├── main.py               # Main FastAPI server entrypoint
+├── requirements.txt      # Python dependencies
+└── README.md
+Prerequisites
+Before you begin, ensure you have the following installed:
+
+Python 3.8+
+
+Node.js v22.x or another supported LTS version. We recommend using nvm to manage Node versions.
+
+pip for Python package installation.
+
 ## 🛠️ Installation
 
 To get the application running on your local machine, please follow these steps.
@@ -40,6 +95,19 @@ Install all the required Python packages from the requirements.txt file:
 
 pip install -r requirements.txt
 
+4. Setup Frontend
+
+# Navigate to the frontend directory
+cd frontend
+
+# Install Node.js dependencies
+npm install
+
+# build
+npm run build
+
+# return to root 
+cd ..
 
 ```
 

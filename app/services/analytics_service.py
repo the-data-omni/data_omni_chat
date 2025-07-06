@@ -1,18 +1,11 @@
-
 """
-analysis_service.py
-------------------------------------------------------------------
-A single class (`DataAnalysisService`) that holds:
-
-• a persistent in‑memory dataset (self.dataset)
-• helpers to upload / clean / analyse / summarise that dataset
+A class that holds:
 • OpenAI‑powered code‑generation & correction
 • CSV or JSON upload support
 
 All endpoints can work with either:
   1. an explicit data list passed in the request, or
   2. the dataset that was previously uploaded via /upload_data
-------------------------------------------------------------------
 """
 import io
 import json
@@ -111,14 +104,14 @@ class DataAnalysisService:
             return pd.DataFrame(self.dataset)
         raise HTTPException(status_code=400, detail="No dataset available. Upload data first.")
     
-    def _summarize_execution(self, execution_result: str | dict,
+    async def _summarize_execution(self, execution_result: str | dict,
                             code: str,
                             question: str = "") -> Dict[str, Any]:
         """
         Wrapper that calls self.summarize() and returns its JSON,
         making sure execution_result is already JSON-serialisable.
         """
-        return self.summarize(
+        return await self.summarize(
             SummarizePayload(
                 execution_result=execution_result,
                 code=code,
@@ -165,7 +158,7 @@ class DataAnalysisService:
             return {"result": f"Error executing code: {exc}\n{traceback.format_exc()}"}
 
 
-    def summarize(self, payload: SummarizePayload, model: str, api_key: str) -> Dict[str, Any]:
+    async def summarize(self, payload: SummarizePayload, model: str, api_key: str) -> Dict[str, Any]:
             raw_output = (
                 payload.execution_result.strip()
                 if isinstance(payload.execution_result, str)
@@ -201,7 +194,7 @@ class DataAnalysisService:
 
     Return valid JSON with keys summary and enhanced_code.
     Ensure chart_data itself is NOT part of your direct output, but inform your summary.
-    """,
+    """""
             }
 
             messages = [system_msg, user_msg]
@@ -209,7 +202,7 @@ class DataAnalysisService:
             # --- CHANGE: Use the provider system ---
             provider = self._get_provider_for_model(model)
             try:
-                ai_text = provider.chat_completion(
+                ai_text = await provider.chat_completion(
                     model=model,
                     messages=messages,
                     temperature=0,
@@ -230,7 +223,7 @@ class DataAnalysisService:
                 raise HTTPException(status_code=500, detail=f"OpenAI returned invalid JSON:\n{ai_text}")
 
     # --------------------  GPT‑DRIVEN ANALYSIS (Code Generation) -------------------- #
-    def analyze(self, req: DataFrameRequest, api_key: str) -> Dict[str, Any]:
+    async def analyze(self, req: DataFrameRequest, api_key: str) -> Dict[str, Any]:
         """
         Prompts an LLM to generate Python code for data analysis based on user's question.
         The generated code should output analysis_data, chart_data (for ECharts),
@@ -312,7 +305,7 @@ Your response (as the LLM assistant generating the code) MUST be a raw JSON obje
 
 Example of YOUR response format:
 {{{{
-  "code": "import json\\nimport pandas as pd\\nimport numpy as np\\n\\n# df is pre-defined. Example: User asked for 'top 3 countries by population'\\n\\n# CRITICAL: Define a robust JSON encoder to handle numpy types\\nclass NumpyEncoder(json.JSONEncoder):\\n    def default(self, obj):\\n        if isinstance(obj, np.integer):\\n            return int(obj)\\n        elif isinstance(obj, np.floating):\\n            return float(obj)\\n        elif isinstance(obj, np.ndarray):\\n            return obj.tolist()\\n        return super(NumpyEncoder, self).default(obj)\\n\\n# Analysis\\nN = 3\\nresult_df = df.nlargest(N, 'population')\\nmean_pop = df['population'].mean()\\ncountry_count = df['country'].nunique()\\ntop_country_name = result_df.iloc[0]['country']\\ntop_country_pop = result_df.iloc[0]['population']\\n\\n# Data for the final JSON output.\\n# No need for manual int() or float() casting here because the Encoder will handle it.\\nanalysis_data_dict = {{\\n    'top_country': top_country_name,\\n    'top_population': top_country_pop,\\n    'average_population': mean_pop,\\n    'total_countries': country_count,\\n    'top_n_count': N\\n}}\\n\\nparameterized_answer_str = \\"Out of {{total_countries}} countries, the most populous is {{top_country}} with {{top_population}} people. The average population is {{average_population}}. This chart shows the top {{top_n_count}} countries.\\"\\n\\nchart_data_for_echarts = {{\\n    'title': {{'text': f'Top {{N}} Countries by Population'}},\\n    'xAxis': {{'type': 'category', 'data': result_df['country'].tolist()}},\\n    'yAxis': {{'type': 'value'}},\\n    'series': [{{'name': 'Population', 'type': 'bar', 'data': result_df['population'].tolist()}}]\\n}}\\n\\n# Final print statement is crucial and MUST use the custom encoder\\nprint(json.dumps({{\\n    'analysis_data': analysis_data_dict,\\n    'chart_data': chart_data_for_echarts,\\n    'parameterized_answer': parameterized_answer_str\\n}}, cls=NumpyEncoder))"
+  "code": "import json\nimport pandas as pd\nimport numpy as np\n\n# df is pre-defined. Example: User asked for 'top 3 countries by population'\n\n# CRITICAL: Define a robust JSON encoder to handle numpy types\nclass NumpyEncoder(json.JSONEncoder):\n    def default(self, obj):\n        if isinstance(obj, np.integer):\n            return int(obj)\n        elif isinstance(obj, np.floating):\n            return float(obj)\n        elif isinstance(obj, np.ndarray):\n            return obj.tolist()\n        return super(NumpyEncoder, self).default(obj)\n\n# Analysis\nN = 3\nresult_df = df.nlargest(N, 'population')\nmean_pop = df['population'].mean()\ncountry_count = df['country'].nunique()\ntop_country_name = result_df.iloc[0]['country']\ntop_country_pop = result_df.iloc[0]['population']\n\n# Data for the final JSON output.\n# No need for manual int() or float() casting here because the Encoder will handle it.\nanalysis_data_dict = {{\n    'top_country': top_country_name,\n    'top_population': top_country_pop,\n    'average_population': mean_pop,\n    'total_countries': country_count,\n    'top_n_count': N\n}}\n\nparameterized_answer_str = \"Out of {{total_countries}} countries, the most populous is {{top_country}} with {{top_population}} people. The average population is {{average_population}}. This chart shows the top {{top_n_count}} countries.\"\n\nchart_data_for_echarts = {{\n    'title': {{'text': f'Top {{N}} Countries by Population'}},\n    'xAxis': {{'type': 'category', 'data': result_df['country'].tolist()}},\n    'yAxis': {{'type': 'value'}},\n    'series': [{{'name': 'Population', 'type': 'bar', 'data': result_df['population'].tolist()}}]\n}}\n\n# Final print statement is crucial and MUST use the custom encoder\nprint(json.dumps({{\n    'analysis_data': analysis_data_dict,\n    'chart_data': chart_data_for_echarts,\n    'parameterized_answer': parameterized_answer_str\n}}, cls=NumpyEncoder))"
 }}}}
 
 ---
@@ -325,7 +318,7 @@ based on the summary or the code from a previous turn.
 
 Based on all the instructions and the history provided above, please respond to the following user question.
 
-User question: "{req.question or 'Perform a general descriptive analysis.'}
+User question: "{req.question or 'Perform a general descriptive analysis.'}"
 """
         sys_msg = {"role": "system", "content": "Respond with raw JSON containing only key 'code'."}
         user_msg = {"role": "user", "content": prompt}
@@ -335,7 +328,7 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
         provider = self._get_provider_for_model(req.model)
         try:
             print(f"analyze: Calling provider for model '{req.model}'...")
-            txt = provider.chat_completion(
+            txt = await provider.chat_completion(
                 model=req.model,
                 messages=messages,
                 temperature=0,
@@ -369,7 +362,7 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
             return {"openai_result": {"code": None, "error": f"Invalid JSON format from LLM provider."}}        
 
     # --------------------  CODE CORRECTION -------------------- #
-    def correct_code(
+    async def correct_code(
         self,
         original_code: str,
         error_message: str,
@@ -410,7 +403,7 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
 
         Expected JSON response:
         {{
-        "code": "df['A'] = pd.to_numeric(df['A'], errors='coerce')\\nprint(df['A'].sum())"
+        "code": "df['A'] = pd.to_numeric(df['A'], errors='coerce')\nprint(df['A'].sum())"
         }}
         ---
 
@@ -431,7 +424,7 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
 
         Return raw JSON: {{ "code": "fixed python code" }}
         The fixed code should print a JSON string to stdout with 'analysis_data' and 'chart_data'.
-        """,
+        """""
         }
 
         messages = [sys_msg, user_msg]
@@ -439,7 +432,7 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
         # --- CHANGE: Use the provider system ---
         provider = self._get_provider_for_model(model)
         try:
-            txt = provider.chat_completion(
+            txt = await provider.chat_completion(
                 model=model,
                 messages=messages,
                 temperature=0,
@@ -459,164 +452,129 @@ User question: "{req.question or 'Perform a general descriptive analysis.'}
             return {"openai_result": {"code": None, "error": f"Invalid JSON from OpenAI during code correction: {txt}"}}
 
     # --------------------  FULL ANALYSIS (on Synthetic Data) -------------------- #
-    async def full_analysis(self, req: DataFrameRequest,api_key: str) -> Dict[str, Any]:
-            """
-            Performs LLM-driven analysis on self.synthetic_dataset, then (optionally)
-            executes LLM-suggested enhanced code. Always returns a summary that matches
-            the code which ultimately produced the chart & analysis data.
-            """
-            # ─────────────────────── sanity checks ───────────────────────
-            if self.synthetic_dataset is None:
-                raise HTTPException(status_code=400, detail="Synthetic dataset not available.")
+    async def full_analysis(self, req: DataFrameRequest, api_key: str) -> Dict[str, Any]:
+        """
+        **Efficiently** performs LLM-driven analysis on `self.synthetic_dataset`.
 
-            # --- SESSION HANDLING LOGIC ---
-            if req.conversation_id and req.conversation_id in self.chat_sessions:
-                # Existing conversation
-                conversation_id = req.conversation_id
-                chat_history = self.chat_sessions[conversation_id]
-            else:
-                # New conversation
-                conversation_id = str(uuid.uuid4())
-                chat_history = []
-                self.chat_sessions[conversation_id] = chat_history
-            # --- END SESSION HANDLING ---
+        This revised method streamlines the process to a single primary LLM call
+        for code generation, followed by an execution and correction loop. It avoids
+        the expensive, chained summarization and enhancement calls of the previous version.
 
-            synthetic_req = DataFrameRequest(
-                question=req.question,
-                data=self.synthetic_dataset,
-                # We don't need to pass the ID down, just the retrieved history
-                chat_history=chat_history,
-                model=req.model 
-            )
+        Workflow:
+        1.  **Code Generation:** Call the LLM once to generate the initial analysis code.
+        2.  **Execution & Correction Loop:**
+            - Execute the generated code.
+            - If it fails, enter a correction loop (max 3 attempts) where the LLM
+              is asked to fix the code based on the error message.
+            - If it succeeds, exit the loop.
+        3.  **Summarization:** After successful execution, call the LLM a final time to
+           summarize the results.
+        4.  **Return:** Send back the complete analysis, including the final code,
+           summary, and data.
+        """
+        # ─────────────────────── sanity checks ───────────────────────
+        if self.synthetic_dataset is None:
+            raise HTTPException(status_code=400, detail="Synthetic dataset not available.")
 
-            analysis_resp = self.analyze(synthetic_req, api_key=api_key)
-            code = analysis_resp["openai_result"].get("code")
-            if not code:
-                detail = analysis_resp["openai_result"].get(
-                    "error",
-                    "GPT did not return valid code for synthetic data.",
+        # --- SESSION HANDLING LOGIC ---
+        conversation_id = req.conversation_id or str(uuid.uuid4())
+        if conversation_id not in self.chat_sessions:
+            self.chat_sessions[conversation_id] = []
+        chat_history = self.chat_sessions[conversation_id]
+
+        # --- PREPARE REQUEST FOR LLM --- 
+        synthetic_req = DataFrameRequest(
+            question=req.question,
+            data=self.synthetic_dataset,
+            chat_history=chat_history,
+            model=req.model
+        )
+
+        # ───────────── 1) Generate Initial Code ─────────────
+        analysis_resp = await self.analyze(synthetic_req, api_key=api_key)
+        initial_code = analysis_resp["openai_result"].get("code")
+        if not initial_code:
+            error_detail = analysis_resp["openai_result"].get("error", "LLM failed to return valid code.")
+            raise HTTPException(status_code=500, detail=error_detail)
+
+        # ─────────────────── helpers / context ────────────────────────
+        df_syn = pd.DataFrame(self.synthetic_dataset)
+        df_head_syn = df_syn.head()
+        rows_syn, cols_syn = len(df_syn), len(df_syn.columns)
+        current_q = req.question or ""
+        max_attempts = 3
+        final_code_executed = initial_code
+        exec_res = None
+
+        # ───────────── 2) Execute Code w/ Correction Loop ─────────────
+        for attempt in range(max_attempts):
+            print(f"Full Analysis: attempt {attempt + 1}\n{final_code_executed}")
+            exec_resp = await self.execute_code(
+                ExecuteCodeWithDataPayload(
+                    code=final_code_executed,
+                    data=self.synthetic_dataset,
                 )
-                raise HTTPException(status_code=500, detail=detail)
+            )
+            result = exec_resp["result"]
 
-            # ─────────────────── helpers / context ────────────────────────
-            df_syn      = pd.DataFrame(self.synthetic_dataset)
-            df_head_syn = df_syn.head()
-            rows_syn, cols_syn = len(df_syn), len(df_syn.columns)
-            current_q   = req.question or ""
-            max_attempt = 3
+            # If execution was successful, break the loop
+            if not (isinstance(result, str) and result.startswith("Error executing code:")):
+                exec_res = result
+                break
 
-            async def run_with_correction(code_snippet: str, question: str) -> Any:
-                """Try code, auto-correct via LLM up to `max_attempt` times."""
-                current_code = code_snippet
-                for attempt in range(max_attempt):
-                    print(f"Full Analysis: attempt {attempt+1}\n{current_code}")
-                    exec_resp = await self.execute_code(
-                        ExecuteCodeWithDataPayload(
-                            code=current_code,
-                            data=self.synthetic_dataset,
-                        )
-                    )
-                    result = exec_resp["result"]
+            # If it was the last attempt, raise an error
+            if attempt == max_attempts - 1:
+                raise HTTPException(status_code=500, detail=f"Code execution failed after {max_attempts} attempts. Last error: {result}")
 
-                    if isinstance(result, str) and result.startswith("Error executing code:"):
-                        if attempt == max_attempt - 1:
-                            return result
-                        print("Correction round due to:", result)
-                        corr = self.correct_code(
-                            original_code=current_code,
-                            error_message=result,
-                            df_head=df_head_syn,
-                            row_count=rows_syn,
-                            col_count=cols_syn,
-                            user_question=question,
-                            model=req.model, # Pass model
-                            api_key=api_key  # Pass api_key
-                        )
-                        corrected_code = corr["openai_result"].get("code")
-                        if not corrected_code:
-                            return f"Error executing code: correction produced no new code. Last error: {result}"
-                        current_code = corrected_code
-                        continue
-                    return result
-                return f"Error executing code: exhausted attempts. Last error: {result}"
-
-            # ───────────── 2) execute initial code (with fixes) ────────────
-            exec_res_initial = await run_with_correction(code, current_q)
-            if isinstance(exec_res_initial, str) and exec_res_initial.startswith("Error executing code:"):
-                raise HTTPException(status_code=500, detail=exec_res_initial)
-
-            # ───────────── 3) summarise initial execution result ───────────
-            summary_data = self.summarize(
-                SummarizePayload(
-                    execution_result=exec_res_initial,
-                    code=code,
-                    question=current_q,
-                ),
+            # Otherwise, try to correct the code
+            print(f"Correction round due to: {result}")
+            correction_resp = await self.correct_code(
+                original_code=final_code_executed,
+                error_message=result,
+                df_head=df_head_syn,
+                row_count=rows_syn,
+                col_count=cols_syn,
+                user_question=current_q,
                 model=req.model,
                 api_key=api_key
             )
+            corrected_code = correction_resp["openai_result"].get("code")
+            if not corrected_code:
+                raise HTTPException(status_code=500, detail=f"LLM failed to correct the code. Last error: {result}")
+            
+            final_code_executed = corrected_code
 
-            final_json_output   = (
-                json.loads(exec_res_initial)
-                if isinstance(exec_res_initial, str)
-                else exec_res_initial
+        # ───────────── 3) Summarize Final Result ─────────────
+        summary_data = await self.summarize(
+            SummarizePayload(
+                execution_result=exec_res,
+                code=final_code_executed,
+                question=current_q,
+            ),
+            model=req.model,
+            api_key=api_key
+        )
+
+        # ───────────── 4) Build & Return Response ──────────────────────
+        final_json_output = json.loads(exec_res) if isinstance(exec_res, str) else exec_res
+        if not isinstance(final_json_output, dict):
+            raise HTTPException(status_code=500, detail="Execution result is not a valid JSON object.")
+
+        final_summary = summary_data.get("summary")
+        if final_summary:
+            self.chat_sessions[conversation_id].append(
+                ChatTurn(
+                    question=req.question,
+                    answer=final_summary,
+                    code=final_code_executed
+                )
             )
-            final_code_executed = code
 
-            # ───────────── 4) try LLM-provided enhanced_code ───────────────
-            enhanced_code = summary_data.get("enhanced_code")
-            if enhanced_code:
-                print("Full Analysis: executing enhanced code")
-                exec_res_enhanced = await run_with_correction(enhanced_code, current_q)
-
-                enhanced_ok = not (
-                    isinstance(exec_res_enhanced, str)
-                    and exec_res_enhanced.startswith("Error executing code:")
-                )
-
-                if enhanced_ok:
-                    print("Full Analysis: enhanced code succeeded.")
-                    summary_data = self.summarize(
-                        SummarizePayload(
-                            execution_result=exec_res_enhanced,
-                            code=enhanced_code,
-                            question=current_q,
-                        ),
-                        model=req.model,
-                        api_key=api_key
-                    )
-                    final_json_output = (
-                        json.loads(exec_res_enhanced)
-                        if isinstance(exec_res_enhanced, str)
-                        else exec_res_enhanced
-                    )
-                    final_code_executed = enhanced_code
-                else:
-                    print("Full Analysis: enhanced code failed, using initial result.")
-
-            # ───────────── 5) build & return response ──────────────────────
-            if not isinstance(final_json_output, dict):
-                raise HTTPException(
-                    status_code=500,
-                    detail="Execution result is not a valid JSON object.",
-                )
-            final_summary = summary_data.get("summary")
-            if final_summary:
-                self.chat_sessions[conversation_id].append(
-                    ChatTurn(
-                        question=req.question,
-                        answer=final_summary,
-                        code=final_code_executed  # Include the code that was executed
-                    )
-                )
-
-            return {
-                "summary":               summary_data.get("summary"),
-                "parameterized_summary": final_json_output.get("parameterized_answer"),
-                "generated_code":        final_code_executed,
-                "chart_data":            final_json_output.get("chart_data"),
-                "analysis_data":         final_json_output.get("analysis_data"),
-                "conversation_id":       conversation_id,
-            }
-
-
+        return {
+            "summary": summary_data.get("summary"),
+            "parameterized_summary": final_json_output.get("parameterized_answer"),
+            "generated_code": final_code_executed,
+            "chart_data": final_json_output.get("chart_data"),
+            "analysis_data": final_json_output.get("analysis_data"),
+            "conversation_id": conversation_id,
+        }

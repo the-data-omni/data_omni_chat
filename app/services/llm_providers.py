@@ -7,7 +7,7 @@ import anthropic
 
 class LLMProvider(ABC):
     @abstractmethod
-    def chat_completion(self, model: str, messages: List[Dict[str, Any]], temperature: float, api_key: str) -> str:
+    async def chat_completion(self, model: str, messages: List[Dict[str, Any]], temperature: float, api_key: str) -> str:
         pass
 
     @abstractmethod
@@ -19,11 +19,11 @@ class LLMProvider(ABC):
         pass
 
 class OpenAIProvider(LLMProvider):
-    def chat_completion(self, model: str, messages: List[Dict[str, Any]], temperature: float, api_key: str) -> str:
+    async def chat_completion(self, model: str, messages: List[Dict[str, Any]], temperature: float, api_key: str) -> str:
         try:
             print(f"--- Calling OpenAI with model: {model} ---")
-            client = openai.OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
+            client = openai.AsyncOpenAI(api_key=api_key)
+            response = await client.chat.completions.create(
                 model=model,
                 messages=messages,
                 temperature=temperature
@@ -52,7 +52,7 @@ class OpenAIProvider(LLMProvider):
 
 
 class GoogleProvider(LLMProvider):
-    def chat_completion(self, model: str, messages: List[Dict[str, Any]], temperature: float, api_key: str) -> str:
+    async def chat_completion(self, model: str, messages: List[Dict[str, Any]], temperature: float, api_key: str) -> str:
         try:
             print(f"Calling Google Gemini with model: {model}")
             genai.configure(api_key=api_key)
@@ -70,7 +70,7 @@ class GoogleProvider(LLMProvider):
                 model_name=model,
                 system_instruction=system_instruction
             )
-            response = gemini_model.generate_content(
+            response = await gemini_model.generate_content_async(
                 gemini_messages,
                 generation_config=genai.types.GenerationConfig(temperature=temperature)
             )
@@ -86,19 +86,19 @@ class GoogleProvider(LLMProvider):
         try:
             genai.configure(api_key=api_key)
             # Check if model exists
-            genai.get_model(f'models/{model}')
+            # This is not an async operation in the current library, but it's fast.
+            await genai.get_model_async(f'models/{model}')
             return (True, "Google Gemini connection successful.")
         except Exception as e:
             return (False, f"Google Gemini connection failed: {e}")
 
 class AnthropicProvider(LLMProvider):
 
-    def chat_completion(self, model: str, messages: List[Dict[str, Any]], temperature: float, api_key: str) -> str:
+    async def chat_completion(self, model: str, messages: List[Dict[str, Any]], temperature: float, api_key: str) -> str:
         try:
             print(f"Calling Anthropic Claude with model: {model} ")
-            client = anthropic.Anthropic(api_key=api_key)
+            client = anthropic.AsyncAnthropic(api_key=api_key)
             
-            # (Your message formatting logic is correct)
             system_prompt = ""
             claude_messages = []
             for msg in messages:
@@ -107,7 +107,7 @@ class AnthropicProvider(LLMProvider):
                 else:
                     claude_messages.append(msg)
             
-            response = client.messages.create(
+            response = await client.messages.create(
                 model=model,
                 system=system_prompt,
                 messages=claude_messages,
@@ -124,10 +124,16 @@ class AnthropicProvider(LLMProvider):
 
     async def verify_connection(self, model: str, api_key: str) -> tuple[bool, str]:
         try:
-            client = anthropic.Anthropic(api_key=api_key)
-            await client.models.list()
-            return (True, "OpenAI connection successful.")
-        except openai.AuthenticationError:
-            return (False, "Invalid OpenAI API Key.")
+            client = anthropic.AsyncAnthropic(api_key=api_key)
+            # A simple, low-cost async operation to verify connection.
+            # Let's try to create a message with a very short prompt.
+            await client.messages.create(
+                model="claude-3-haiku-20240307", # Use a fast model
+                max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}]
+            )
+            return (True, "Anthropic connection successful.")
+        except anthropic.AuthenticationError:
+            return (False, "Invalid Anthropic API Key.")
         except Exception as e:
-            return (False, f"OpenAI connection failed: {e}")
+            return (False, f"Anthropic connection failed: {e}")

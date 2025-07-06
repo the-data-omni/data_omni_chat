@@ -1,0 +1,26 @@
+# .gitignore
+
+# Local environment variables
+.env
+.env.local
+.env.*.local
+
+# Firebase cache and emulators
+.firebase/hosting.*.cache
+*.log
+emulators.log
+
+# Build output
+/dist
+
+# Python
+__pycache__/
+.venv/
+
+# React
+frontend/node_modules/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
