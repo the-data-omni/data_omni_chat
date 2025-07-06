@@ -4,7 +4,6 @@ from fastapi.responses import FileResponse
 import os
 
 import logging
-# from app.services.analytics_service import router as analytics_router
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes.routes import router as analytics_router
