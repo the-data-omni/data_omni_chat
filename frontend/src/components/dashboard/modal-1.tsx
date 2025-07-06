@@ -41,6 +41,12 @@ interface AnonymizedData {
     preview: Record<string, string | number>[];
 }
 
+// Data structure for the original data preview
+interface OriginalDataPreview {
+  headers: string[];
+  rows: (string | number)[][];
+}
+
 // The Python code is stored as a string constant to be sent to the worker.
 const ANONYMIZATION_PYTHON_CODE = `
 from __future__ import annotations
@@ -253,6 +259,7 @@ export default function Modal1({ onClose }: Modal1Props): React.JSX.Element {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<{ success: boolean; message: string } | null>(null);
   const { setActiveFileName, analysisWorker } = React.useContext(ChatContext);
+  const [originalDataPreview, setOriginalDataPreview] = useState<OriginalDataPreview | null>(null);
   
   React.useEffect(() => {
     if (!analysisWorker) {
@@ -303,18 +310,30 @@ export default function Modal1({ onClose }: Modal1Props): React.JSX.Element {
 
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // setFile(e.target.files?.[0] ?? null);
     const selectedFile = e.target.files?.[0] ?? null;
     setFile(selectedFile);
     setActiveFileName(selectedFile ? selectedFile.name : null);
 
     if (selectedFile) {
       saveFileToIndexedDB(selectedFile).catch(error_ => {
-        // Optionally handle errors, e.g., show an alert to the user
         console.error("Failed to save original file:", error_);
       });
+
+      // --- Preview Logic ---
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target?.result as string;
+        const lines = text.split('\n').filter(line => line.trim() !== '');
+        if (lines.length > 0) {
+          const headers = hasHeaders ? lines[0].split(',') : lines[0].split(',').map((_, i) => `Column ${i + 1}`);
+          const rows = (hasHeaders ? lines.slice(1, 6) : lines.slice(0, 5)).map(line => line.split(','));
+          setOriginalDataPreview({ headers, rows });
+        }
+      };
+      reader.readAsText(selectedFile);
+      // --- End Preview Logic ---
     }
-    // Reset all states for a new file
+
     setAnonymizedData(null);
     setFullAnonymizedData(null);
     setError(null);
@@ -399,6 +418,31 @@ export default function Modal1({ onClose }: Modal1Props): React.JSX.Element {
                 {isProcessing ? 'Anonymizing...' : 'Anonymize Data'}
             </Button>
         </Stack>
+        {originalDataPreview && (
+          <Box sx={{ mt: 3 }}>
+            <Typography variant="h6" gutterBottom>Data Preview</Typography>
+            <TableContainer component={Paper} variant="outlined">
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    {originalDataPreview.headers.map(header => (
+                      <TableCell key={header} sx={{ fontWeight: 'bold' }}>{header}</TableCell>
+                    ))}
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {originalDataPreview.rows.map((row, index) => (
+                    <TableRow key={index}>
+                      {row.map((cell, cellIndex) => (
+                        <TableCell key={cellIndex}>{cell}</TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
+        )}
     </Box>
   );
 
