@@ -24,6 +24,7 @@ The repository is organized into a backend (app) and a frontend (frontend) direc
 ├── main.py               # Main FastAPI server entrypoint
 ├── requirements.txt      # Python dependencies
 └── README.md
+```
 Prerequisites
 Before you begin, ensure you have the following installed:
 
@@ -33,7 +34,7 @@ Node.js v22.x or another supported LTS version. We recommend using nvm to manage
 
 pip for Python package installation.
 
-```
+
 
 ## 🛠️ Installation
 
@@ -41,7 +42,7 @@ To get the application running on your local machine, please follow these steps.
 
 ```bash
 
-### 1. Clone the Repository
+1. Clone the Repository
 
 First, clone the repository to your local machine using the following command:
 
